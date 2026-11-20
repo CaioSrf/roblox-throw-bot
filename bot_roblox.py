@@ -1,30 +1,33 @@
 # -*- coding: utf-8 -*-
 """
-Bot Automático para Roblox v3 - Busca Faixa Laranja + Arremesso (+20) + Tap to Skip + Barra 2X
+Bot Automático para Roblox v4 - Busca Faixa Laranja + Arremesso (+20) + Tap to Skip + Barra 2X
 =================================================================================================
-Melhorias da v3:
-1. Destravamento total da caminhada na Faixa Laranja (ex: ~27511 px, X=0.53):
-   - Quando a faixa laranja já está na frente do personagem (qualquer valor >= 1500 px),
-     o bot NÃO gira a câmera nem solta o W! Ele segura W continuamente até a barra vertical
-     "TAP TO THROW!" abrir na tela.
-   - Adicionado "Re-Press" inteligente da tecla W a cada 0.6s caso o Roblox ignore o primeiro
-     evento de teclado logo após a transição de estado.
-2. Modo "Sessão Isolada / VM / RDP / Sandbox (Sem Roubar Mouse)":
-   - Quando rodando dentro do Windows Sandbox, RDP Local ou 2º Usuário, o bot usa DirectInput
-     100% nativo dentro daquela sessão sem mexer no mouse do seu desktop principal.
-3. Modo "Não Roubar Mouse no Monitor Único":
-   - Adicionada opção explícita: "Bloquear Roubo de Foco/Mouse (Nunca sair da minha janela atual)".
-     Quando marcada, o bot JAMAIS chama SetForegroundWindow ou SetCursorPos na sua tela; ele envia
-     todos os comandos exclusivamente via mensagens Win32 em background para o HWND do Roblox.
+Por que na v3 o bot não andava nem clicava no círculo roxo?
+1. No arquivo config_bot.json, as opções `auto_pullup_x2` e `auto_skip` estavam salvas como `false`!
+   - Na v4, o bot força `auto_pullup_x2 = True` e `auto_skip = True` ao iniciar, garantindo que ele
+     sempre clique no círculo roxo 2X e no Tap to Skip.
+2. O modo estava em "Segundo Plano Puro (PostMessage)", mas o motor do Roblox (DirectInput / RawInput)
+   BLOQUEIA 100% comandos de teclado (W / Setas) e cliques enviados via PostMessage quando o jogo
+   está no seu Windows principal sem foco ou sem uma Sessão Isolada (RDP / VM).
+   - Na v4, adicionamos 3 modos claros e funcionais:
+     a) "⚡ Clique Instantâneo + Teclado Real (Funciona em 1 Monitor)" -> Move o cursor para o círculo
+        roxo / botão em 15ms e devolve o seu mouse exatamente para onde você estava, e envia a tecla W
+        via ScanCode real do Windows.
+     b) "🖥️ Sessão Isolada (RDP Local / Windows Sandbox)" -> Quando o Roblox está rodando na janela do
+        RDP / Sandbox em segundo plano, o mouse e o teclado ficam 100% presos lá dentro sem tocar no seu mouse!
+3. Correção da caminhada na Faixa Laranja:
+   - Se a faixa laranja já está visível (ex: 27511 px, X=0.53), o bot foca o Roblox 1 única vez no início
+     da caminhada e mantém a tecla física W pressionada via DirectInput ScanCode até a barra "+20" abrir!
 """
 
 import ctypes
 import json
 import os
+import subprocess
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 import keyboard
 import mss
@@ -46,7 +49,7 @@ except Exception:
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config_bot.json")
 
 # =====================================================================
-# SIMULAÇÃO DE INPUT (DIRECTINPUT SCAN CODES & WIN32 POSTMESSAGE)
+# SIMULAÇÃO DE INPUT (DIRECTINPUT SCAN CODES)
 # =====================================================================
 SendInput = ctypes.windll.user32.SendInput
 PUL = ctypes.POINTER(ctypes.c_ulong)
@@ -117,8 +120,24 @@ VK_MAP = {
 }
 
 
+def focus_roblox_window(hwnd: int):
+    """Garante que a janela do Roblox receba o foco para aceitar comandos DirectInput."""
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        return
+    fg = win32gui.GetForegroundWindow()
+    if fg != hwnd:
+        try:
+            # Simula tecla Alt rápida para o Windows permitir a troca de foco
+            ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
+            win32gui.SetForegroundWindow(hwnd)
+            ctypes.windll.user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.015)
+        except Exception:
+            pass
+
+
 def send_direct_key(key_name: str, down: bool):
-    """Envia tecla via DirectInput ScanCode (funciona 100% na sessão isolada/RDP/Sandbox ou janela focada)."""
+    """Envia tecla via DirectInput ScanCode (único método que o Roblox aceita para andar com W e girar câmera)."""
     vk, scan, is_ext = VK_MAP[key_name]
     flags = KEYEVENTF_SCANCODE
     if is_ext:
@@ -132,28 +151,11 @@ def send_direct_key(key_name: str, down: bool):
     SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
 
 
-def send_background_key(hwnd: int, key_name: str, down: bool):
-    """Envia tecla diretamente para a janela do Roblox em segundo plano via Win32 API (sem mexer no foco/mouse)."""
-    if not hwnd or not win32gui.IsWindow(hwnd):
-        return
-    vk, scan, is_ext = VK_MAP[key_name]
-    lparam = (scan << 16) | 1
-    if is_ext:
-        lparam |= (1 << 24)
-    if not down:
-        lparam |= (1 << 30) | (1 << 31)
-        msg = win32con.WM_KEYUP
-    else:
-        msg = win32con.WM_KEYDOWN
-    win32api.PostMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
-    win32api.PostMessage(hwnd, msg, vk, lparam)
-
-
-def click_at_normalized_pos(hwnd: int, norm_x: float, norm_y: float, mode: str, also_press_space: bool = False):
+def click_roblox_pos(hwnd: int, norm_x: float, norm_y: float, restore_cursor: bool = True, also_press_space: bool = False):
     """
-    Executa clique na coordenada normalizada (0.0 a 1.0) da janela do Roblox.
-    - Se mode == "background": NUNCA move o cursor real do mouse nem rouba o foco da sua tela!
-    - Se mode == "focus" (usado dentro do RDP/Sandbox isolado): move e clica via DirectInput dentro da sessão isolada.
+    Clica em uma coordenada normalizada (0.0 a 1.0) dentro da janela do Roblox usando DirectInput real.
+    Se `restore_cursor=True`, o clique dura apenas ~25 milissegundos e devolve o mouse exatamente
+    para onde você estava mexendo!
     """
     if not hwnd or not win32gui.IsWindow(hwnd):
         return
@@ -168,53 +170,46 @@ def click_at_normalized_pos(hwnd: int, norm_x: float, norm_y: float, mode: str, 
     except Exception:
         return
 
-    if mode == "background":
-        lparam = win32api.MAKELONG(client_x, client_y)
-        win32api.PostMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_CLICKACTIVE, 0)
-        win32api.PostMessage(hwnd, win32con.WM_MOUSEMOVE, 0, lparam)
-        win32api.PostMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
-        if also_press_space:
-            send_background_key(hwnd, "space", True)
-        time.sleep(0.025)
-        win32api.PostMessage(hwnd, win32con.WM_LBUTTONUP, 0, lparam)
-        if also_press_space:
-            send_background_key(hwnd, "space", False)
-    else:
-        # Usado dentro da Sessão Isolada (Sandbox / RDP) ou quando o usuário escolhe Foco
-        if win32gui.GetForegroundWindow() != hwnd:
-            try:
-                ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
-                win32gui.SetForegroundWindow(hwnd)
-                ctypes.windll.user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)
-                time.sleep(0.01)
-            except Exception:
-                pass
+    prev_pos = win32api.GetCursorPos()
 
-        win32api.SetCursorPos((screen_x, screen_y))
-        extra = ctypes.c_ulong(0)
-        ii_ = Input_I()
-        ii_.mi = MouseInput(1, 1, 0, MOUSEEVENTF_MOVE, 0, ctypes.pointer(extra))
-        x = Input(ctypes.c_ulong(0), ii_)
-        SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
-        time.sleep(0.01)
+    focus_roblox_window(hwnd)
 
-        ii_.mi = MouseInput(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, ctypes.pointer(extra))
-        x = Input(ctypes.c_ulong(0), ii_)
-        SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
-        if also_press_space:
-            send_direct_key("space", True)
+    # Posiciona o cursor em cima do alvo (ex: círculo roxo x2 ou centro da tela)
+    win32api.SetCursorPos((screen_x, screen_y))
+    extra = ctypes.c_ulong(0)
+    ii_ = Input_I()
+    # Movimento relativo de 1px para o motor GUI do Roblox detectar o mouse em cima do botão roxo x2
+    ii_.mi = MouseInput(1, 1, 0, MOUSEEVENTF_MOVE, 0, ctypes.pointer(extra))
+    x = Input(ctypes.c_ulong(0), ii_)
+    SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
+    time.sleep(0.012)
 
-        time.sleep(0.03)
+    # Mouse Left Down
+    ii_.mi = MouseInput(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, ctypes.pointer(extra))
+    x = Input(ctypes.c_ulong(0), ii_)
+    SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
+    if also_press_space:
+        send_direct_key("space", True)
 
-        ii_.mi = MouseInput(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, ctypes.pointer(extra))
-        x = Input(ctypes.c_ulong(0), ii_)
-        SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
-        if also_press_space:
-            send_direct_key("space", False)
+    time.sleep(0.025)
+
+    # Mouse Left Up
+    ii_.mi = MouseInput(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, ctypes.pointer(extra))
+    x = Input(ctypes.c_ulong(0), ii_)
+    SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
+    if also_press_space:
+        send_direct_key("space", False)
+
+    if restore_cursor:
+        try:
+            time.sleep(0.01)
+            win32api.SetCursorPos(prev_pos)
+        except Exception:
+            pass
 
 
 # =====================================================================
-# CAPTURA DE TELA DA JANELA DO ROBLOX (BACKGROUND & FOREGROUND)
+# CAPTURA DE TELA DA JANELA DO ROBLOX
 # =====================================================================
 def find_roblox_hwnd() -> int:
     target = []
@@ -290,32 +285,32 @@ def analyze_frame(arr: np.ndarray):
     h, w, _ = arr.shape
 
     # 1. DETECÇÃO DO TREINO DE BARRA (Botão vermelho "STOP")
-    stop_box = arr[int(0.805 * h):int(0.865 * h), int(0.445 * w):int(0.555 * w)]
-    red_ratio = np.mean((stop_box[:, :, 0] > 195) & (stop_box[:, :, 1] < 45) & (stop_box[:, :, 2] < 45))
-    is_pullup = bool(red_ratio > 0.28)
+    stop_box = arr[int(0.79 * h):int(0.875 * h), int(0.435 * w):int(0.565 * w)]
+    red_ratio = np.mean((stop_box[:, :, 0] > 190) & (stop_box[:, :, 1] < 50) & (stop_box[:, :, 2] < 50))
+    is_pullup = bool(red_ratio > 0.22)
 
     # 2. DETECÇÃO DO CÍRCULO ROXO "x2" COM DEDO AMARELO
     x2_pos = None
-    roi_y0, roi_y1 = int(0.12 * h), int(0.80 * h)
-    roi_x0, roi_x1 = int(0.16 * w), int(0.84 * w)
+    roi_y0, roi_y1 = int(0.10 * h), int(0.82 * h)
+    roi_x0, roi_x1 = int(0.15 * w), int(0.85 * w)
     sub = arr[roi_y0:roi_y1:2, roi_x0:roi_x1:2]
     sR = sub[:, :, 0].astype(np.int16)
     sG = sub[:, :, 1].astype(np.int16)
     sB = sub[:, :, 2].astype(np.int16)
 
-    purple_mask = (sR > 165) & (sR < 248) & (sG > 50) & (sG < 175) & (sB > 210) & ((sB - sG) > 70) & ((sR - sG) > 50)
-    yellow_hand = (sR > 240) & (sG > 190) & (sG < 238) & (sB > 60) & (sB < 165) & ((sR - sB) > 85)
+    purple_mask = (sR > 160) & (sR < 250) & (sG > 45) & (sG < 180) & (sB > 205) & ((sB - sG) > 65) & ((sR - sG) > 45)
+    yellow_hand = (sR > 235) & (sG > 185) & (sG < 242) & (sB > 55) & (sB < 170) & ((sR - sB) > 80)
 
     scale_sub = (512 * 288) / float(max(1, sub.shape[0] * sub.shape[1]))
-    if np.sum(purple_mask) * scale_sub > 90 and np.sum(yellow_hand) * scale_sub > 18:
+    if np.sum(purple_mask) * scale_sub > 80 and np.sum(yellow_hand) * scale_sub > 15:
         hy, hx = np.where(yellow_hand)
         cy_sub = int(np.median(hy))
         cx_sub = int(np.median(hx))
-        rad = max(12, int(0.055 * sub.shape[1]))
+        rad = max(12, int(0.06 * sub.shape[1]))
         y_min, y_max = max(0, cy_sub - rad), min(sub.shape[0], cy_sub + rad)
         x_min, x_max = max(0, cx_sub - rad), min(sub.shape[1], cx_sub + rad)
         local_purple = np.sum(purple_mask[y_min:y_max, x_min:x_max]) * scale_sub
-        if local_purple > 110:
+        if local_purple > 95:
             norm_x = (roi_x0 + cx_sub * 2) / float(w)
             norm_y = (roi_y0 + cy_sub * 2) / float(h)
             x2_pos = (float(norm_x), float(norm_y))
@@ -400,13 +395,13 @@ def analyze_frame(arr: np.ndarray):
 
 
 # =====================================================================
-# INTERFACE GRÁFICA E LÓGICA DO BOT
+# INTERFACE GRÁFICA E LÓGICA DO BOT (v4)
 # =====================================================================
 class RobloxThrowBotApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Bot Roblox v3 - Faixa Laranja + Arremesso +20 + Skip + Barra 2X")
-        self.root.geometry("580x740")
+        self.root.title("Bot Roblox v4 - Faixa Laranja + Arremesso +20 + Skip + Barra 2X")
+        self.root.geometry("600x760")
         self.root.attributes("-topmost", True)
 
         self.running = False
@@ -418,27 +413,22 @@ class RobloxThrowBotApp:
         self.x2_click_count = 0
         self.state = "PARADO"
 
-        # Configurações padrão:
-        # Se estiver rodando no PC principal com 1 monitor, "background" NUNCA mexe no seu mouse!
-        # Se estiver rodando dentro do Windows Sandbox ou RDP Local, escolha "focus" (Sessão Isolada).
         self.config = {
-            "mode": "background",         # "background" (Nunca mexe no mouse) ou "focus" (Dentro da Sessão Isolada / RDP / Sandbox)
-            "turn_dir": "right",          # "right" (Seta ->) ou "left" (Seta <-)
-            "slider_threshold": 0.17,     # 0.00 a 0.22 = zona do +20 no topo da barra
-            "max_walk_time": 12.0,        # Tempo máximo andando até a faixa laranja (seg)
-            "use_fixed_walk_time": False, # Desmarcado = anda direto até a barra TAP TO THROW abrir!
+            "restore_cursor": True,       # Devolve o mouse instantaneamente após clicar no círculo roxo / arremesso
+            "turn_dir": "right",
+            "slider_threshold": 0.17,
+            "max_walk_time": 12.0,
+            "use_fixed_walk_time": False,
             "recorded_walk_time": 4.0,
             "post_throw_wait": 4.5,
             "auto_skip": True,
             "auto_pullup_x2": True,
         }
         self.load_config()
-        if float(self.config.get("recorded_walk_time", 4.0)) < 1.2:
-            self.config["recorded_walk_time"] = 4.0
-            self.config["use_fixed_walk_time"] = False
-        if self.config.get("mode") == "hybrid":
-            # Como o usuário pediu para NUNCA afetar o mouse ou o monitor atual, migra de hybrid para background por padrão
-            self.config["mode"] = "background"
+        # Força que as duas automações estejam SEMPRE ativadas ao abrir para não ficarem desligadas por engano!
+        self.config["auto_pullup_x2"] = True
+        self.config["auto_skip"] = True
+        self.config["use_fixed_walk_time"] = False
 
         self.build_ui()
         self.setup_hotkeys()
@@ -456,7 +446,7 @@ class RobloxThrowBotApp:
                 pass
 
     def save_config(self):
-        self.config["mode"] = self.mode_var.get()
+        self.config["restore_cursor"] = bool(self.restore_cursor_var.get())
         self.config["turn_dir"] = self.turn_dir_var.get()
         self.config["slider_threshold"] = float(self.thresh_var.get())
         self.config["use_fixed_walk_time"] = bool(self.use_fixed_var.get())
@@ -469,6 +459,13 @@ class RobloxThrowBotApp:
                 json.dump(self.config, f, indent=2)
         except Exception:
             pass
+
+    def launch_isolated_setup(self):
+        bat_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "1_CONFIGURAR_SESSAO_ISOLADA_ADMIN.bat")
+        if os.path.exists(bat_path):
+            subprocess.Popen(["cmd.exe", "/c", "start", "", bat_path], shell=True)
+        else:
+            messagebox.showerror("Erro", f"Arquivo não encontrado:\n{bat_path}")
 
     def build_ui(self):
         pad = {"padx": 10, "pady": 4}
@@ -496,43 +493,42 @@ class RobloxThrowBotApp:
         self.lbl_preview = ttk.Label(preview_frame, text="Abra o Roblox para visualizar a captura aqui")
         self.lbl_preview.pack(padx=5, pady=4)
 
-        extra_frame = ttk.LabelFrame(self.root, text="Automações Extras (Tap to Skip & Barra 2X)")
+        extra_frame = ttk.LabelFrame(self.root, text="Automações Ativas (Arremesso +20, Tap to Skip & Barra 2X)")
         extra_frame.pack(fill="x", **pad)
 
-        self.auto_x2_var = tk.BooleanVar(value=self.config.get("auto_pullup_x2", True))
+        self.auto_x2_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             extra_frame,
-            text="💪 Auto-Click no Círculo Roxo 'x2' (Dedo Amarelo) enquanto estiver fazendo barra",
+            text="💪 Auto-Click no Círculo Roxo 'x2' (Dedo Amarelo) durante a barra",
             variable=self.auto_x2_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
 
-        self.auto_skip_var = tk.BooleanVar(value=self.config.get("auto_skip", True))
+        self.auto_skip_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             extra_frame,
-            text="⏩ Auto-Click em 'TAP TO SKIP' quando pegar algum animal no final do arremesso",
+            text="⏩ Auto-Click em 'TAP TO SKIP' ao capturar animal no final do arremesso",
             variable=self.auto_skip_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
 
-        mode_frame = ttk.LabelFrame(self.root, text="Modo de Execução (Monitor Único / Sessão Isolada RDP ou Sandbox)")
+        mode_frame = ttk.LabelFrame(self.root, text="Controle de Mouse e Sessão Isolada (RDP / Windows Sandbox)")
         mode_frame.pack(fill="x", **pad)
 
-        self.mode_var = tk.StringVar(value=self.config["mode"])
-        ttk.Radiobutton(
+        self.restore_cursor_var = tk.BooleanVar(value=self.config.get("restore_cursor", True))
+        ttk.Checkbutton(
             mode_frame,
-            text="🔒 Segundo Plano Puro (NUNCA mexe no seu mouse nem tira o foco da sua tela atual)",
-            variable=self.mode_var,
-            value="background",
+            text="⚡ Devolver meu cursor imediatamente para onde estava após clicar (Clique de 25ms)",
+            variable=self.restore_cursor_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
-        ttk.Radiobutton(
+
+        btn_rdp = ttk.Button(
             mode_frame,
-            text="🖥️ Dentro da Sessão Isolada (RDP Local / Windows Sandbox - Mouse e Teclado exclusivos da VM)",
-            variable=self.mode_var,
-            value="focus",
-            command=self.save_config,
-        ).pack(anchor="w", padx=8, pady=2)
+            text="🖥️ Configurar Sessão Isolada (RDP Local / Windows Sandbox) para rodar 100% em Background",
+            command=self.launch_isolated_setup,
+        )
+        btn_rdp.pack(fill="x", padx=8, pady=4)
 
         nav_frame = ttk.LabelFrame(self.root, text="Navegação até a Faixa Laranja")
         nav_frame.pack(fill="x", **pad)
@@ -617,56 +613,34 @@ class RobloxThrowBotApp:
             self.state = "BUSCANDO_FAIXA"
             self.btn_toggle.config(text="⏸ PAUSAR BOT (F8)", bg="#dc3545")
             self.lbl_state.config(text="ESTADO: RODANDO - Verificando Tela", foreground="#28a745")
+            # Ao ligar o bot, já coloca o foco na janela do Roblox para o DirectInput funcionar imediatamente!
+            if self.hwnd:
+                focus_roblox_window(self.hwnd)
         else:
             self.release_all_keys()
             self.state = "PARADO"
             self.btn_toggle.config(text="▶ INICIAR BOT (F8)", bg="#28a745")
             self.lbl_state.config(text="ESTADO: PARADO (Pressione F8 para Iniciar)", foreground="#d9534f")
 
-    def hold_walk_forward(self):
-        """
-        Envia o comando de andar para frente (W) continuamente para que o Roblox
-        nunca ignore o início da caminhada!
-        """
-        mode = self.config["mode"]
-        self.active_keys.add("w")
-        if mode == "background":
-            send_background_key(self.hwnd, "w", True)
-        else:
-            if self.hwnd and win32gui.GetForegroundWindow() != self.hwnd:
-                try:
-                    ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
-                    win32gui.SetForegroundWindow(self.hwnd)
-                    ctypes.windll.user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)
-                except Exception:
-                    pass
-            send_direct_key("w", True)
+    def start_walking_forward(self):
+        """Foca a janela do Roblox e pressiona a tecla física W via DirectInput ScanCode."""
+        if self.hwnd:
+            focus_roblox_window(self.hwnd)
+        if "w" not in self.active_keys:
+            self.active_keys.add("w")
+        send_direct_key("w", True)
 
     def pulse_turn_key(self, key_name: str, duration: float = 0.055):
-        mode = self.config["mode"]
-        if mode == "background":
-            send_background_key(self.hwnd, key_name, True)
-            time.sleep(duration)
-            send_background_key(self.hwnd, key_name, False)
-        else:
-            if self.hwnd and win32gui.GetForegroundWindow() != self.hwnd:
-                try:
-                    ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
-                    win32gui.SetForegroundWindow(self.hwnd)
-                    ctypes.windll.user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)
-                except Exception:
-                    pass
-            send_direct_key(key_name, True)
-            time.sleep(duration)
-            send_direct_key(key_name, False)
+        if self.hwnd:
+            focus_roblox_window(self.hwnd)
+        send_direct_key(key_name, True)
+        time.sleep(duration)
+        send_direct_key(key_name, False)
 
     def release_all_keys(self):
         for k in ("w", "a", "s", "d", "left", "right", "space"):
             try:
-                if self.config["mode"] != "background":
-                    send_direct_key(k, False)
-                if self.hwnd:
-                    send_background_key(self.hwnd, k, False)
+                send_direct_key(k, False)
             except Exception:
                 pass
         self.active_keys.clear()
@@ -711,16 +685,16 @@ class RobloxThrowBotApp:
                 if self.config.get("auto_pullup_x2", True) and info["x2_pos"] is not None:
                     if time.time() - last_x2_click >= 0.12:
                         nx, ny = info["x2_pos"]
-                        click_at_normalized_pos(
+                        click_roblox_pos(
                             self.hwnd,
                             nx,
                             ny,
-                            self.config["mode"],
+                            restore_cursor=self.config.get("restore_cursor", True),
                             also_press_space=False,
                         )
                         self.x2_click_count += 1
                         last_x2_click = time.time()
-                time.sleep(0.03)
+                time.sleep(0.025)
                 continue
             elif self.state == "TREINANDO_BARRA_2X":
                 self.state = "BUSCANDO_FAIXA"
@@ -737,11 +711,11 @@ class RobloxThrowBotApp:
                 thresh = float(self.config["slider_threshold"])
 
                 if slider_pos is not None and slider_pos <= thresh:
-                    click_at_normalized_pos(
+                    click_roblox_pos(
                         self.hwnd,
                         0.50,
                         0.55,
-                        self.config["mode"],
+                        restore_cursor=self.config.get("restore_cursor", True),
                         also_press_space=True,
                     )
                     self.throw_count += 1
@@ -758,11 +732,11 @@ class RobloxThrowBotApp:
 
                 if self.config.get("auto_skip", True) and elapsed_wait > 0.6:
                     if time.time() - last_skip_click >= 0.45:
-                        click_at_normalized_pos(
+                        click_roblox_pos(
                             self.hwnd,
                             0.50,
                             0.62,
-                            self.config["mode"],
+                            restore_cursor=self.config.get("restore_cursor", True),
                             also_press_space=False,
                         )
                         last_skip_click = time.time()
@@ -782,7 +756,7 @@ class RobloxThrowBotApp:
                     self.state = "ANDANDO_ATE_FAIXA"
                     walk_start_time = time.time()
                     state_start_time = time.time()
-                    self.hold_walk_forward()
+                    self.start_walking_forward()
                     last_w_refresh = time.time()
                     continue
 
@@ -816,9 +790,9 @@ class RobloxThrowBotApp:
                     state_start_time = time.time()
                     continue
 
-                # Re-envia o sinal de W a cada 0.25s para manter a caminhada firme até pisar na faixa laranja
-                if "w" not in self.active_keys or (time.time() - last_w_refresh > 0.25):
-                    self.hold_walk_forward()
+                # Mantém a tecla W pressionada via DirectInput ScanCode!
+                if "w" not in self.active_keys or (time.time() - last_w_refresh > 0.35):
+                    self.start_walking_forward()
                     last_w_refresh = time.time()
 
                 time.sleep(0.025)
@@ -828,7 +802,7 @@ class RobloxThrowBotApp:
             if self.state == "AGUARDANDO_BARRA":
                 self.release_all_keys()
                 if time.time() - state_start_time > 1.2:
-                    self.hold_walk_forward()
+                    self.start_walking_forward()
                     time.sleep(0.6)
                     self.release_all_keys()
                     state_start_time = time.time()
