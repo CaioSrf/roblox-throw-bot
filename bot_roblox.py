@@ -1,31 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-Bot Automático para Roblox v8 - Refatoração Arquitetural Completa
-=================================================================
-Melhorias obrigatórias e correções aplicadas na v8:
-1. Navegação com Travamento de Alinhamento + Setas (left/right):
-   - Substituído A/D por pulsos proporcionais nas setas `left` / `right` para girar a câmera e alinhar `target_x` com `0.52`.
-   - Trava de alinhamento: só segura `W` quando `abs(target_x - 0.52) <= 0.14`. Se desalinhado, solta `W`, alinha primeiro e depois anda.
-2. Hotbar Dinâmica do Roblox:
-   - Detecta dinamicamente todos os slots visíveis na hotbar inferior da esquerda para a direita.
-   - Mapeia o slot equipado com borda branca para a tecla correta (`1`..`0`) e usa clique em `(best_cx, 0.915)` como fallback se continuar equipado no frame seguinte.
-3. Radar Anti-Colisão Preciso (`frame_sig` + `unstick_maneuver`):
-   - `frame_sig` recortado exclusivamente para a faixa lateral inferior do chão (`small[int(0.55*sh):int(0.85*sh):4, int(0.05*sw):int(0.28*sw):4]`).
-   - `unstick_maneuver(attempt)` alterna `a` (pares) e `d` (ímpares), recua com `s` (`0.15s`), pula (`space` + lado por `0.25s`) e retoma `w`.
-4. Latência e Precisão no Arremesso (+20):
-   - Removido `also_press_space=True` no clique do arremesso.
-   - Verificação de direção da barrinha branca: se `slider_pos > prev_slider_pos` (descendo), ignora o clique e aguarda subir novamente.
-   - Durante `is_power_bar == True`, suspende o envio de `arr` para `update_ui_status` para maximizar o FPS do loop.
-5. Persistência Real do `config_bot.json`:
-   - Respeita integralmente as opções salvas pelo usuário ao iniciar.
-6. Auto-Fechar "Sell Animals" + Detecção Espacial Precisa do Círculo Roxo `x2`:
-   - Fecha automaticamente a janela "Sell Animals" (além de Animal Index e Throw Power) e afasta-se da barraca se necessário.
-   - Localiza o círculo roxo `x2` pela maior concentração local de roxo + mão amarela interna, funcionando em qualquer ponto aleatório da tela.
+Bot Automático para Roblox v8.5 - Throw Food for Animals
+Arquitetura Híbrida (v8 + Humanizer + Predição Temporal +20 + x2 Puro)
+=========================================================================
+Mescla integral da v8 com:
+1. Predição Temporal Real (dt) na Barra +20: compensa oscilações de FPS calculando velocidade/segundo.
+2. Detecção Pura do Círculo Roxo 'x2': não depende mais da animação do dedo amarelo para clicar.
+3. Humanizer de Input: jitter aleatório de coordenadas e tempos de pressionamento (anti-padrão mecânico).
+4. Escape Real de Tela Poluída: passo lateral + giro de câmera para sair de dentro de mobs gigantes.
 """
 
 import ctypes
 import json
 import os
+import random
 import subprocess
 import threading
 import time
@@ -76,7 +64,7 @@ WORLD_PHASES = [
 ]
 
 # =====================================================================
-# SIMULAÇÃO DE INPUT (DIRECTINPUT SCAN CODES)
+# SIMULAÇÃO DE INPUT COM HUMANIZER (DIRECTINPUT SCAN CODES)
 # =====================================================================
 SendInput = ctypes.windll.user32.SendInput
 PUL = ctypes.POINTER(ctypes.c_ulong)
@@ -188,12 +176,20 @@ def send_direct_key(key_name: str, down: bool):
 
 
 def tap_key(key_name: str, duration: float = 0.035):
+    jitter = random.uniform(-0.005, 0.007)
     send_direct_key(key_name, True)
-    time.sleep(duration)
+    time.sleep(max(0.018, duration + jitter))
     send_direct_key(key_name, False)
 
 
-def click_roblox_pos(hwnd: int, norm_x: float, norm_y: float, restore_cursor: bool = True, also_press_space: bool = False):
+def click_roblox_pos(
+    hwnd: int,
+    norm_x: float,
+    norm_y: float,
+    restore_cursor: bool = True,
+    also_press_space: bool = False,
+    jitter_px: int = 5,
+):
     if not hwnd or not win32gui.IsWindow(hwnd):
         return
 
@@ -201,8 +197,10 @@ def click_roblox_pos(hwnd: int, norm_x: float, norm_y: float, restore_cursor: bo
         crect = win32gui.GetClientRect(hwnd)
         cw = max(1, crect[2] - crect[0])
         ch = max(1, crect[3] - crect[1])
-        client_x = int(cw * norm_x)
-        client_y = int(ch * norm_y)
+        jx = random.randint(-jitter_px, jitter_px) if jitter_px > 0 else 0
+        jy = random.randint(-jitter_px, jitter_px) if jitter_px > 0 else 0
+        client_x = max(1, min(cw - 1, int(cw * norm_x) + jx))
+        client_y = max(1, min(ch - 1, int(ch * norm_y) + jy))
         screen_x, screen_y = win32gui.ClientToScreen(hwnd, (client_x, client_y))
     except Exception:
         return
@@ -216,7 +214,7 @@ def click_roblox_pos(hwnd: int, norm_x: float, norm_y: float, restore_cursor: bo
     ii_.mi = MouseInput(1, 1, 0, MOUSEEVENTF_MOVE, 0, ctypes.pointer(extra))
     x = Input(ctypes.c_ulong(0), ii_)
     SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
-    time.sleep(0.01)
+    time.sleep(0.009)
 
     ii_.mi = MouseInput(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, ctypes.pointer(extra))
     x = Input(ctypes.c_ulong(0), ii_)
@@ -224,7 +222,7 @@ def click_roblox_pos(hwnd: int, norm_x: float, norm_y: float, restore_cursor: bo
     if also_press_space:
         send_direct_key("space", True)
 
-    time.sleep(0.022)
+    time.sleep(random.uniform(0.019, 0.026))
 
     ii_.mi = MouseInput(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, ctypes.pointer(extra))
     x = Input(ctypes.c_ulong(0), ii_)
@@ -234,7 +232,7 @@ def click_roblox_pos(hwnd: int, norm_x: float, norm_y: float, restore_cursor: bo
 
     if restore_cursor:
         try:
-            time.sleep(0.008)
+            time.sleep(0.007)
             win32api.SetCursorPos(prev_pos)
         except Exception:
             pass
@@ -244,11 +242,11 @@ def drag_slider_to_pos(hwnd: int, target_norm_x: float, restore_cursor: bool = T
     if not hwnd or not win32gui.IsWindow(hwnd):
         return
     focus_roblox_window(hwnd)
-    click_roblox_pos(hwnd, 0.195, 0.858, restore_cursor=False, also_press_space=False)
+    click_roblox_pos(hwnd, 0.195, 0.858, restore_cursor=False, jitter_px=2)
     time.sleep(0.25)
-    click_roblox_pos(hwnd, target_norm_x, 0.710, restore_cursor=False, also_press_space=False)
+    click_roblox_pos(hwnd, target_norm_x, 0.710, restore_cursor=False, jitter_px=1)
     time.sleep(0.18)
-    click_roblox_pos(hwnd, 0.357, 0.630, restore_cursor=restore_cursor, also_press_space=False)
+    click_roblox_pos(hwnd, 0.357, 0.630, restore_cursor=restore_cursor, jitter_px=2)
     time.sleep(0.15)
 
 
@@ -323,15 +321,9 @@ def capture_window_rgb(hwnd: int, sct: mss.mss) -> np.ndarray | None:
 
 
 # =====================================================================
-# VISÃO COMPUTACIONAL v8
+# VISÃO COMPUTACIONAL v8.5
 # =====================================================================
 def detect_equipped_hotbar_slot(arr: np.ndarray):
-    """
-    Detecta dinamicamente a hotbar inferior centralizada (de 1 até 10 itens).
-    Conta os blocos visíveis da esquerda para a direita para mapear o slot equipado
-    exatamente para a tecla numérica ('1'..'9','0') correspondente, priorizando '1' quando há poucos itens.
-    Retorna (is_equipped, slot_center_x, slot_center_y, slot_key_str).
-    """
     h, w, _ = arr.shape
     x0, x1 = int(0.24 * w), int(0.76 * w)
 
@@ -355,9 +347,7 @@ def detect_equipped_hotbar_slot(arr: np.ndarray):
             best_cx = (x0 + i + win // 2) / float(w)
 
     if best_score > 0.52 and best_cx is not None:
-        # Mapeia dinamicamente os slots visíveis pela presença de fundo escuro da hotbar
         slot_mask = np.mean(mid_band, axis=(0, 2)) < 120
-        # Encontra intervalos contínuos que representam cada quadrado da hotbar
         diff = np.diff(slot_mask.astype(np.int8), prepend=0, append=0)
         starts = np.where(diff == 1)[0]
         ends = np.where(diff == -1)[0]
@@ -377,7 +367,6 @@ def detect_equipped_hotbar_slot(arr: np.ndarray):
         if len(visible_centers) <= 2:
             slot_key = "1"
         elif visible_centers:
-            # Usa o centro do primeiro slot válido como âncora e divide pelo passo de 0.044*w
             first_cx = visible_centers[0]
             idx = int(round((best_cx - first_cx) / 0.044))
             idx = max(0, min(9, idx))
@@ -391,15 +380,9 @@ def detect_equipped_hotbar_slot(arr: np.ndarray):
 
 
 def detect_open_modals(arr: np.ndarray):
-    """
-    Detecta janelas abertas que bloqueiam o bot:
-    - SELL_ANIMALS (Cabeçalho vermelho, fundo escuro, botão X vermelho em (0.754, 0.142))
-    - ANIMAL_INDEX (Cabeçalho rosa/roxo, botão X vermelho em (0.812, 0.209))
-    - THROW_POWER_POPUP (Fundo escuro à esquerda, botão X vermelho em (0.357, 0.630))
-    """
     h, w, _ = arr.shape
 
-    # 1. SELL ANIMALS (ex: media_1795147122499_48d2854d.jpg)
+    # 1. SELL ANIMALS
     sell_hdr = arr[int(0.10 * h):int(0.175 * h), int(0.25 * w):int(0.75 * w)]
     sell_body = arr[int(0.25 * h):int(0.84 * h), int(0.25 * w):int(0.75 * w)]
     sell_x_box = arr[int(0.115 * h):int(0.170 * h), int(0.730 * w):int(0.780 * w)]
@@ -430,26 +413,24 @@ def detect_open_modals(arr: np.ndarray):
 
 def detect_x2_circle(arr: np.ndarray):
     """
-    Identifica o círculo roxo 'x2' com a mãozinha amarela em qualquer posição aleatória
-    do meio da tela pela concentração local de pixels roxos + pixels amarelos internos.
+    Detecta o círculo roxo 'x2' em qualquer ponto aleatório da área de treino
+    sem exigir que o dedo amarelo esteja visível (imune à animação de pulso do ícone).
     """
     h, w, _ = arr.shape
-    roi_y0, roi_y1 = int(0.10 * h), int(0.82 * h)
-    roi_x0, roi_x1 = int(0.15 * w), int(0.85 * w)
+    roi_y0, roi_y1 = int(0.12 * h), int(0.78 * h)
+    roi_x0, roi_x1 = int(0.18 * w), int(0.82 * w)
     sub = arr[roi_y0:roi_y1:2, roi_x0:roi_x1:2]
     sR = sub[:, :, 0].astype(np.int16)
     sG = sub[:, :, 1].astype(np.int16)
     sB = sub[:, :, 2].astype(np.int16)
 
-    purple_mask = (sR > 160) & (sR < 250) & (sG > 45) & (sG < 180) & (sB > 205) & ((sB - sG) > 65) & ((sR - sG) > 45)
+    purple_mask = (sR > 160) & (sR < 252) & (sG > 40) & (sG < 180) & (sB > 205) & ((sB - sG) > 65) & ((sR - sG) > 45)
     yellow_hand = (sR > 235) & (sG > 185) & (sG < 242) & (sB > 55) & (sB < 170) & ((sR - sB) > 80)
 
     scale_sub = (512 * 288) / float(max(1, sub.shape[0] * sub.shape[1]))
-    if np.sum(purple_mask) * scale_sub < 80 or np.sum(yellow_hand) * scale_sub < 15:
+    if np.sum(purple_mask) * scale_sub < 90:
         return None
 
-    # Divide a área de busca em uma grade 8x6 para encontrar o cluster local mais denso de roxo+amarelo,
-    # evitando desvios caso haja texto amarelo em outro canto da tela
     sh, sw = sub.shape[:2]
     grid_r, grid_c = 6, 8
     cell_h, cell_w = max(1, sh // grid_r), max(1, sw // grid_c)
@@ -462,8 +443,8 @@ def detect_x2_circle(arr: np.ndarray):
             x0, x1 = max(0, c * cell_w - 10), min(sw, (c + 1) * cell_w + 10)
             p_cnt = float(np.sum(purple_mask[y0:y1, x0:x1])) * scale_sub
             y_cnt = float(np.sum(yellow_hand[y0:y1, x0:x1])) * scale_sub
-            if p_cnt >= 95 and y_cnt >= 14:
-                score = p_cnt + y_cnt * 2.0
+            if p_cnt >= 95:
+                score = p_cnt + y_cnt * 1.5
                 if score > best_score:
                     best_score = score
                     best_cell = (y0, y1, x0, x1)
@@ -472,9 +453,9 @@ def detect_x2_circle(arr: np.ndarray):
         return None
 
     y0, y1, x0, x1 = best_cell
-    hy, hx = np.where(yellow_hand[y0:y1, x0:x1])
-    cy_sub = y0 + int(np.median(hy))
-    cx_sub = x0 + int(np.median(hx))
+    py, px = np.where(purple_mask[y0:y1, x0:x1])
+    cy_sub = y0 + int(np.median(py))
+    cx_sub = x0 + int(np.median(px))
 
     norm_x = (roi_x0 + cx_sub * 2) / float(w)
     norm_y = (roi_y0 + cy_sub * 2) / float(h)
@@ -484,18 +465,14 @@ def detect_x2_circle(arr: np.ndarray):
 def analyze_frame(arr: np.ndarray):
     h, w, _ = arr.shape
 
-    # 0. VERIFICA MODAIS ABERTOS (Sell Animals / Animal Index / Throw Power Popup)
     modal_name, modal_close_pos = detect_open_modals(arr)
 
-    # 1. DETECÇÃO DO TREINO DE BARRA (Botão vermelho "STOP")
     stop_box = arr[int(0.79 * h):int(0.875 * h), int(0.435 * w):int(0.565 * w)]
     red_ratio = np.mean((stop_box[:, :, 0] > 190) & (stop_box[:, :, 1] < 50) & (stop_box[:, :, 2] < 50))
     is_pullup = bool(red_ratio > 0.22 and modal_name is None)
 
-    # 2. DETECÇÃO DO CÍRCULO ROXO "x2" COM DEDO AMARELO EM POSIÇÃO ALEATÓRIA (APENAS DURANTE TREINO DE BARRA)
     x2_pos = detect_x2_circle(arr) if (is_pullup and modal_name is None) else None
 
-    # 3. VERIFICAÇÃO RIGOROSA DA BARRA DE ARREMESSO ("TAP TO THROW!")
     top_slice = arr[int(0.18 * h):int(0.32 * h), int(0.49 * w):int(0.51 * w)]
     mid_slice = arr[int(0.45 * h):int(0.53 * h), int(0.49 * w):int(0.51 * w)]
     bot_slice = arr[int(0.64 * h):int(0.71 * h), int(0.49 * w):int(0.51 * w)]
@@ -523,12 +500,10 @@ def analyze_frame(arr: np.ndarray):
             wy = np.where(white_rows)[0]
             slider_pos = float(np.mean(wy) / max(1, bar_col.shape[0]))
 
-    # 4. DETECÇÃO DE MOB EQUIPADO NA MÃO (Hotbar Dinâmica)
     mob_equipped, mob_slot_x, mob_slot_y, mob_slot_key = detect_equipped_hotbar_slot(arr)
     if is_pullup or is_power_bar or modal_name is not None:
         mob_equipped = False
 
-    # 5. ANÁLISE COMPLETA DO MAPA RESISTENTE A TELA POLUÍDA / MOBS GIGANTES
     small = arr[::2, ::2]
     sh, sw, _ = small.shape
     R = small[:, :, 0].astype(np.int16)
@@ -611,8 +586,6 @@ def analyze_frame(arr: np.ndarray):
         target_x = min(0.78, beacon_x + (0.04 if sell_px >= 380 else 0.12))
         nav_stage = "ESTAGIO_1_FAROL_LONGE"
 
-    # Assinatura visual recortada exclusivamente para a faixa lateral inferior do chão
-    # (ignora nuvens no céu e animação idle do avatar para o detector de colisão!)
     frame_sig = small[int(0.55 * sh):int(0.85 * sh):4, int(0.05 * sw):int(0.28 * sw):4].astype(np.float32)
 
     return {
@@ -644,12 +617,12 @@ def analyze_frame(arr: np.ndarray):
 
 
 # =====================================================================
-# INTERFACE GRÁFICA E LÓGICA DO BOT (v8)
+# INTERFACE GRÁFICA E LÓGICA DO BOT (v8.5)
 # =====================================================================
 class RobloxThrowBotApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Bot Roblox v8 - Auto-Index + Auto-Upgrade (E) + Barra 2X + Arremesso +20")
+        self.root.title("Bot Roblox v8.5 - Throw Food for Animals")
         self.root.geometry("650x840")
         self.root.attributes("-topmost", True)
 
@@ -668,7 +641,7 @@ class RobloxThrowBotApp:
         self.config = {
             "restore_cursor": True,
             "turn_dir": "right",
-            "slider_threshold": 0.18,
+            "slider_threshold": 0.16,
             "max_walk_time": 14.0,
             "use_fixed_walk_time": False,
             "recorded_walk_time": 4.0,
@@ -722,17 +695,10 @@ class RobloxThrowBotApp:
         self.save_config()
         self.needs_power_apply = True
 
-    def launch_isolated_setup(self):
-        bat_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "1_CONFIGURAR_SESSAO_ISOLADA_ADMIN.bat")
-        if os.path.exists(bat_path):
-            subprocess.Popen(["cmd.exe", "/c", "start", "", bat_path], shell=True)
-        else:
-            messagebox.showerror("Erro", f"Arquivo não encontrado:\n{bat_path}")
-
     def build_ui(self):
         pad = {"padx": 10, "pady": 3}
 
-        status_frame = ttk.LabelFrame(self.root, text="Radar do Mapa e Status em Tempo Real (v8)")
+        status_frame = ttk.LabelFrame(self.root, text="Radar do Mapa e Status em Tempo Real (v8.5)")
         status_frame.pack(fill="x", **pad)
 
         self.lbl_state = ttk.Label(
@@ -758,7 +724,7 @@ class RobloxThrowBotApp:
         self.lbl_preview = ttk.Label(preview_frame, text="Abra o Roblox para visualizar a captura aqui")
         self.lbl_preview.pack(padx=5, pady=3)
 
-        phase_frame = ttk.LabelFrame(self.root, text="🌍 Completar Fases do Animal Index (Ajuste Automático de Throw Power)")
+        phase_frame = ttk.LabelFrame(self.root, text="Completar Fases do Animal Index (Ajuste Automático de Throw Power)")
         phase_frame.pack(fill="x", **pad)
 
         prow1 = ttk.Frame(phase_frame)
@@ -769,14 +735,14 @@ class RobloxThrowBotApp:
         saved_phase = self.config.get("target_phase_name", phase_names[0])
         self.phase_combo.set(saved_phase if saved_phase in phase_names else phase_names[0])
         self.phase_combo.pack(side="left", padx=5)
-        ttk.Button(prow1, text="🎯 Aplicar Fase no Jogo Agora", command=self.trigger_apply_phase_now).pack(side="left", padx=4)
+        ttk.Button(prow1, text="Aplicar Fase Agora", command=self.trigger_apply_phase_now).pack(side="left", padx=4)
 
         prow2 = ttk.Frame(phase_frame)
         prow2.pack(fill="x", padx=8, pady=2)
         self.auto_rotate_var = tk.BooleanVar(value=bool(self.config.get("auto_rotate_phases", False)))
         ttk.Checkbutton(
             prow2,
-            text="🔄 Alternar automaticamente entre as fases incompletas a cada",
+            text="Alternar automaticamente entre as fases incompletas a cada",
             variable=self.auto_rotate_var,
             command=self.save_config,
         ).pack(side="left")
@@ -790,7 +756,7 @@ class RobloxThrowBotApp:
         self.auto_upgrade_var = tk.BooleanVar(value=bool(self.config.get("auto_upgrade_e", True)))
         ttk.Checkbutton(
             extra_frame,
-            text="⬆️ Auto-Upgrade da Barra (Aperta 'E' ao voltar pro cercado/passar na plataforma amarela independente do valor $)",
+            text="Auto-Upgrade da Barra (Aperta 'E' ao voltar pro cercado/passar na plataforma amarela)",
             variable=self.auto_upgrade_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
@@ -798,7 +764,7 @@ class RobloxThrowBotApp:
         self.auto_unequip_var = tk.BooleanVar(value=bool(self.config.get("auto_unequip_mob", True)))
         ttk.Checkbutton(
             extra_frame,
-            text="🐾 Auto-Guardar Mob Novo da Mão + Limpar Tela Poluída (Tecla do Slot 1..0 + Fechar Popups)",
+            text="Auto-Guardar Mob Novo da Mão + Limpar Tela Poluída (Tecla do Slot 1..0 + Fechar Popups)",
             variable=self.auto_unequip_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
@@ -806,7 +772,7 @@ class RobloxThrowBotApp:
         self.auto_x2_var = tk.BooleanVar(value=bool(self.config.get("auto_pullup_x2", True)))
         ttk.Checkbutton(
             extra_frame,
-            text="💪 Auto-Click no Círculo Roxo 'x2' (Dedo Amarelo) sempre que entrar no círculo da barra",
+            text="Auto-Click no Círculo Roxo 'x2' (Detecção pura em qualquer ponto aleatório)",
             variable=self.auto_x2_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
@@ -814,28 +780,28 @@ class RobloxThrowBotApp:
         self.auto_skip_var = tk.BooleanVar(value=bool(self.config.get("auto_skip", True)))
         ttk.Checkbutton(
             extra_frame,
-            text="⏩ Auto-Click em 'TAP TO SKIP' ao capturar animal no final do arremesso",
+            text="Auto-Click em 'TAP TO SKIP' ao capturar animal no final do arremesso",
             variable=self.auto_skip_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
 
-        mode_frame = ttk.LabelFrame(self.root, text="Execução no seu Windows Principal (ou Sandbox Opcional)")
+        mode_frame = ttk.LabelFrame(self.root, text="Controle de Cursor e Humanizer")
         mode_frame.pack(fill="x", **pad)
 
         self.restore_cursor_var = tk.BooleanVar(value=bool(self.config.get("restore_cursor", True)))
         ttk.Checkbutton(
             mode_frame,
-            text="⚡ Funcionar direto no meu Windows (Devolve o cursor em 22ms após cada clique)",
+            text="Devolver o cursor imediatamente após cada clique (com jitter humano de posição/tempo)",
             variable=self.restore_cursor_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
 
-        nav_frame = ttk.LabelFrame(self.root, text="Navegação 3 Estágios (Alinhamento por Setas + Farol EVENT/Mago/SELL)")
+        nav_frame = ttk.LabelFrame(self.root, text="Navegação (Trava de Alinhamento por Setas + Limite de Tempo Opcional)")
         nav_frame.pack(fill="x", **pad)
 
         row1 = ttk.Frame(nav_frame)
         row1.pack(fill="x", padx=8, pady=2)
-        ttk.Label(row1, text="Direção para escanear o mapa ao sair do cercado:").pack(side="left")
+        ttk.Label(row1, text="Direção de busca ao sair do cercado:").pack(side="left")
         self.turn_dir_var = tk.StringVar(value=str(self.config.get("turn_dir", "right")))
         ttk.Radiobutton(row1, text="Direita (→)", variable=self.turn_dir_var, value="right", command=self.save_config).pack(side="left", padx=5)
         ttk.Radiobutton(row1, text="Esquerda (←)", variable=self.turn_dir_var, value="left", command=self.save_config).pack(side="left", padx=5)
@@ -843,7 +809,7 @@ class RobloxThrowBotApp:
         self.use_fixed_var = tk.BooleanVar(value=bool(self.config.get("use_fixed_walk_time", False)))
         ttk.Checkbutton(
             nav_frame,
-            text="Limitar caminhada por tempo fixo (Desmarcado = navega pelo mapa até a barra 'TAP TO THROW!' abrir)",
+            text="Limitar caminhada por tempo fixo (segundos configurados abaixo)",
             variable=self.use_fixed_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
@@ -851,12 +817,14 @@ class RobloxThrowBotApp:
         row2 = ttk.Frame(nav_frame)
         row2.pack(fill="x", padx=8, pady=2)
         ttk.Label(row2, text="Zona do Topo (+20):").pack(side="left")
-        self.thresh_var = tk.DoubleVar(value=float(self.config.get("slider_threshold", 0.18)))
+        self.thresh_var = tk.DoubleVar(value=float(self.config.get("slider_threshold", 0.16)))
         ttk.Spinbox(row2, from_=0.04, to=0.30, increment=0.01, textvariable=self.thresh_var, width=5, command=self.save_config).pack(side="left", padx=4)
-        ttk.Label(row2, text="| Espera Skip/Retorno (s):").pack(side="left", padx=4)
+        ttk.Label(row2, text="| Espera Skip (s):").pack(side="left", padx=4)
         self.wait_time_var = tk.DoubleVar(value=float(self.config.get("post_throw_wait", 4.5)))
         ttk.Spinbox(row2, from_=2.0, to=15.0, increment=0.5, textvariable=self.wait_time_var, width=5, command=self.save_config).pack(side="left", padx=4)
+        ttk.Label(row2, text="| Tempo Walk (s):").pack(side="left", padx=4)
         self.walk_time_var = tk.DoubleVar(value=float(self.config.get("recorded_walk_time", 4.0)))
+        ttk.Spinbox(row2, from_=1.0, to=15.0, increment=0.2, textvariable=self.walk_time_var, width=5, command=self.save_config).pack(side="left", padx=4)
 
         btn_frame = ttk.Frame(self.root)
         btn_frame.pack(fill="x", padx=10, pady=6)
@@ -923,20 +891,14 @@ class RobloxThrowBotApp:
         send_direct_key("w", False)
 
     def steer_while_walking(self, target_x: float):
-        """
-        Gira a câmera com pulsos proporcionais nas setas `left` / `right` para alinhar `target_x`
-        com o centro (`0.52`). Só permite segurar `W` quando `abs(target_x - 0.52) <= 0.14`.
-        """
         error = target_x - 0.52
         if abs(error) > 0.14:
-            # Desalinhado: solta W, gira a câmera primeiro até ficar de frente para a pista
             self.stop_walking_forward()
             turn_key = "right" if error > 0 else "left"
             pulse_dur = min(0.065, max(0.025, abs(error) * 0.14))
             self.pulse_turn_key(turn_key, duration=pulse_dur)
             return False
 
-        # Alinhado dentro da tolerância: micro-correção suave de câmera mantendo W pressionado
         if abs(error) > 0.045:
             turn_key = "right" if error > 0 else "left"
             pulse_dur = min(0.028, max(0.012, abs(error) * 0.10))
@@ -945,35 +907,32 @@ class RobloxThrowBotApp:
             send_direct_key(turn_key, False)
         return True
 
-    def escape_cluttered_spawn_maneuver(self):
+    def escape_cluttered_spawn_maneuver(self, attempt: int = 0):
         if self.hwnd:
             focus_roblox_window(self.hwnd)
         if self.config.get("auto_upgrade_e", True):
             tap_key("e", 0.03)
             self.upgrade_attempts += 1
+
+        side_key = "d" if (attempt % 2 == 0) else "a"
         turn_key = "right" if self.config["turn_dir"] == "right" else "left"
+        send_direct_key(side_key, True)
         send_direct_key(turn_key, True)
-        time.sleep(0.085)
+        time.sleep(random.uniform(0.10, 0.15))
+        send_direct_key(side_key, False)
         send_direct_key(turn_key, False)
 
     def unstick_maneuver(self, attempt: int = 0):
-        """
-        Alterna o lado do desvio (`a` nas tentativas pares, `d` nas ímpares),
-        dá um breve recuo com `s` (0.15s) antes de pular (`space` + tecla lateral por 0.25s)
-        e volta a pressionar `w`.
-        """
         if self.hwnd:
             focus_roblox_window(self.hwnd)
         self.stop_walking_forward()
         if self.config.get("auto_upgrade_e", True):
             tap_key("e", 0.03)
 
-        # Breve recuo com S
         send_direct_key("s", True)
         time.sleep(0.15)
         send_direct_key("s", False)
 
-        # Pulo + passo lateral alternado (a nas pares, d nas ímpares)
         side_key = "a" if (attempt % 2 == 0) else "d"
         send_direct_key("space", True)
         send_direct_key(side_key, True)
@@ -981,7 +940,6 @@ class RobloxThrowBotApp:
         send_direct_key("space", False)
         send_direct_key(side_key, False)
 
-        # Volta a pressionar W
         self.start_walking_forward()
 
     def pulse_turn_key(self, key_name: str, duration: float = 0.065):
@@ -1005,14 +963,15 @@ class RobloxThrowBotApp:
         state_start_time = time.time()
         walk_start_time = 0.0
         last_w_refresh = 0.0
-        last_steer_time = 0.0
         last_skip_click = 0.0
         last_x2_click = 0.0
         last_unequip_time = 0.0
         last_e_upgrade_time = 0.0
         unequip_retry_with_click = False
         unstick_attempt = 0
+        clutter_attempt = 0
         prev_slider_pos = None
+        prev_slider_time = None
         prev_frame_sig = None
         last_sig_check_time = 0.0
 
@@ -1032,8 +991,6 @@ class RobloxThrowBotApp:
 
             info = analyze_frame(arr)
 
-            # Durante is_power_bar == True, suspende o redimensionamento de imagem do preview (arr=None)
-            # para maximizar o FPS e reduzir o atraso do clique no topo!
             if loop_start - last_preview_time > 0.25:
                 last_preview_time = loop_start
                 preview_arr = None if info["is_power_bar"] else arr
@@ -1048,10 +1005,9 @@ class RobloxThrowBotApp:
                 self.state = "BUSCANDO_ROTA_NO_MAPA"
                 state_start_time = time.time()
                 prev_slider_pos = None
+                prev_slider_time = None
 
-            # =================================================================
-            # 0) FECHAR POPUPS ABERTOS POR ENGANO (Sell Animals / Animal Index / Throw Power)
-            # =================================================================
+            # 0) FECHAR POPUPS ABERTOS POR ENGANO
             if info["modal_name"] is not None and not self.needs_power_apply:
                 self.release_all_keys()
                 modal_name = info["modal_name"]
@@ -1061,11 +1017,9 @@ class RobloxThrowBotApp:
                     cx,
                     cy,
                     restore_cursor=self.config.get("restore_cursor", True),
-                    also_press_space=False,
+                    jitter_px=3,
                 )
                 time.sleep(0.20)
-                # Se abriu "Sell Animals" sem querer ao pisar no círculo vermelho de venda,
-                # dá um pequeno passo para trás/lado para sair da área de venda e não reabrir!
                 if modal_name == "SELL_ANIMALS":
                     focus_roblox_window(self.hwnd)
                     send_direct_key("s", True)
@@ -1074,9 +1028,7 @@ class RobloxThrowBotApp:
                     self.state = "BUSCANDO_ROTA_NO_MAPA"
                 continue
 
-            # =================================================================
-            # 1) APLICAR MUDANÇA DE FASE (THROW POWER SLIDER) SE SOLICITADO
-            # =================================================================
+            # 1) APLICAR MUDANÇA DE FASE (THROW POWER SLIDER)
             if self.needs_power_apply and not info["is_power_bar"] and not info["is_pullup"]:
                 self.release_all_keys()
                 self.state = "AJUSTANDO_THROW_POWER_FASE"
@@ -1090,64 +1042,64 @@ class RobloxThrowBotApp:
                 self.state = "BUSCANDO_ROTA_NO_MAPA"
                 continue
 
-            # =================================================================
-            # 2) MODO TREINO DE BARRA (AO ENTRAR NO CÍRCULO DA BARRA -> CLICA NO 2X!)
-            # =================================================================
+            # 2) MODO TREINO DE BARRA (CLICA NO CÍRCULO ROXO x2 EM QUALQUER POSIÇÃO)
             if info["is_pullup"] or info["x2_pos"] is not None:
                 self.release_all_keys()
                 self.state = "TREINANDO_BARRA_2X"
                 if self.config.get("auto_pullup_x2", True) and info["x2_pos"] is not None:
-                    if time.time() - last_x2_click >= 0.11:
+                    if time.time() - last_x2_click >= random.uniform(0.09, 0.13):
                         nx, ny = info["x2_pos"]
                         click_roblox_pos(
                             self.hwnd,
                             nx,
                             ny,
                             restore_cursor=self.config.get("restore_cursor", True),
-                            also_press_space=False,
+                            jitter_px=4,
                         )
                         self.x2_click_count += 1
                         last_x2_click = time.time()
-                time.sleep(0.02)
+                time.sleep(0.015)
                 continue
             elif self.state == "TREINANDO_BARRA_2X":
                 self.state = "BUSCANDO_ROTA_NO_MAPA"
                 state_start_time = time.time()
 
-            # =================================================================
-            # 3) BARRA VERTICAL DE ARREMESSO ("TAP TO THROW!")
-            # =================================================================
+            # 3) BARRA VERTICAL DE ARREMESSO ("TAP TO THROW!") COM PREDIÇÃO TEMPORAL REAL (dt)
             if info["is_power_bar"]:
                 if self.state != "ARREMESSANDO_+20":
                     self.release_all_keys()
                     self.state = "ARREMESSANDO_+20"
                     state_start_time = time.time()
                     prev_slider_pos = None
+                    prev_slider_time = None
 
                 slider_pos = info["slider_pos"]
                 thresh = float(self.config["slider_threshold"])
+                now = time.time()
 
                 if slider_pos is not None:
-                    # Verifica direção do movimento: se slider_pos > prev_slider_pos (barrinha descendo),
-                    # ignora o clique e aguarda ela bater na base e subir novamente!
                     if prev_slider_pos is not None and slider_pos > prev_slider_pos + 0.002:
                         prev_slider_pos = slider_pos
+                        prev_slider_time = now
                         continue
 
                     effective_pos = slider_pos
-                    if prev_slider_pos is not None and slider_pos < prev_slider_pos:
-                        vel_up = prev_slider_pos - slider_pos
-                        effective_pos = max(0.0, slider_pos - vel_up * 0.65)
+                    if prev_slider_pos is not None and prev_slider_time is not None and slider_pos < prev_slider_pos:
+                        dt = max(0.004, min(0.10, now - prev_slider_time))
+                        vel_per_sec = (prev_slider_pos - slider_pos) / dt
+                        effective_pos = max(0.0, slider_pos - vel_per_sec * 0.032)
+
                     prev_slider_pos = slider_pos
+                    prev_slider_time = now
 
                     if effective_pos <= thresh:
-                        # Sem also_press_space=True para não pular nem duplicar input
                         click_roblox_pos(
                             self.hwnd,
                             0.50,
                             0.55,
                             restore_cursor=self.config.get("restore_cursor", True),
                             also_press_space=False,
+                            jitter_px=6,
                         )
                         self.throw_count += 1
                         self.throws_in_current_phase += 1
@@ -1162,24 +1114,23 @@ class RobloxThrowBotApp:
                         state_start_time = time.time()
                         last_skip_click = time.time()
                         prev_slider_pos = None
+                        prev_slider_time = None
                         time.sleep(0.20)
                 continue
 
-            # =================================================================
-            # 4) APÓS O ARREMESSO: CLICA EM "TAP TO SKIP", GUARDA MOB E DÁ UPGRADE (E)
-            # =================================================================
+            # 4) APÓS O ARREMESSO: TAP TO SKIP + UPGRADE (E)
             if self.state == "TAP_TO_SKIP_E_RETORNO":
                 self.release_all_keys()
                 elapsed_wait = time.time() - state_start_time
 
                 if self.config.get("auto_skip", True) and elapsed_wait > 0.55:
-                    if time.time() - last_skip_click >= 0.42:
+                    if time.time() - last_skip_click >= random.uniform(0.38, 0.48):
                         click_roblox_pos(
                             self.hwnd,
                             0.50,
                             0.62,
                             restore_cursor=self.config.get("restore_cursor", True),
-                            also_press_space=False,
+                            jitter_px=8,
                         )
                         last_skip_click = time.time()
 
@@ -1194,9 +1145,7 @@ class RobloxThrowBotApp:
                 time.sleep(0.04)
                 continue
 
-            # =================================================================
-            # 5) GUARDAR MOB EQUIPADO NA MÃO (HOTBAR DINÂMICA + FALLBACK CLIQUE)
-            # =================================================================
+            # 5) GUARDAR MOB EQUIPADO NA MÃO
             if self.config.get("auto_unequip_mob", True) and info["mob_equipped"] and info["mob_slot_x"] is not None:
                 if time.time() - last_unequip_time >= 0.35:
                     self.release_all_keys()
@@ -1204,7 +1153,6 @@ class RobloxThrowBotApp:
                     focus_roblox_window(self.hwnd)
                     if not unequip_retry_with_click and info["mob_slot_key"] is not None:
                         tap_key(info["mob_slot_key"], 0.035)
-                        # Se no frame seguinte ainda estiver equipado, o próximo ciclo usa o clique como fallback
                         unequip_retry_with_click = True
                     else:
                         click_roblox_pos(
@@ -1212,7 +1160,7 @@ class RobloxThrowBotApp:
                             info["mob_slot_x"],
                             info["mob_slot_y"],
                             restore_cursor=self.config.get("restore_cursor", True),
-                            also_press_space=False,
+                            jitter_px=3,
                         )
                         unequip_retry_with_click = False
                     self.unequip_count += 1
@@ -1223,9 +1171,7 @@ class RobloxThrowBotApp:
             else:
                 unequip_retry_with_click = False
 
-            # =================================================================
-            # 6) AUTO-UPGRADE (TECLA 'E') SEMPRE QUE O BOTÃO AMARELO DE UPGRADE ESTIVER VISÍVEL
-            # =================================================================
+            # 6) AUTO-UPGRADE (TECLA 'E')
             if self.config.get("auto_upgrade_e", True) and info["yellow_pad_px"] >= 500:
                 if time.time() - last_e_upgrade_time >= 1.8:
                     focus_roblox_window(self.hwnd)
@@ -1233,10 +1179,9 @@ class RobloxThrowBotApp:
                     self.upgrade_attempts += 1
                     last_e_upgrade_time = time.time()
 
-            # =================================================================
-            # 7) NAVEGAÇÃO NO MAPA COM TRAVA DE ALINHAMENTO POR SETAS
-            # =================================================================
+            # 7) NAVEGAÇÃO NO MAPA COM TRAVA DE ALINHAMENTO
             if info["nav_stage"] != "SEARCHING":
+                clutter_attempt = 0
                 if not self.state.startswith("NAVEGANDO_"):
                     walk_start_time = time.time()
                     last_sig_check_time = time.time()
@@ -1252,14 +1197,12 @@ class RobloxThrowBotApp:
                     state_start_time = time.time()
                     continue
 
-                # Alinha câmera com setas left/right; só segura W se abs(target_x - 0.52) <= 0.14
                 aligned = self.steer_while_walking(info["target_x"])
                 if aligned:
                     if "w" not in self.active_keys or (time.time() - last_w_refresh > 0.30):
                         self.start_walking_forward()
                         last_w_refresh = time.time()
 
-                    # Radar Anti-Colisão (Optical Flow na faixa lateral inferior do chão)
                     if time.time() - last_sig_check_time > 1.1:
                         if prev_frame_sig is not None:
                             diff = float(np.mean(np.abs(info["frame_sig"] - prev_frame_sig)))
@@ -1275,13 +1218,12 @@ class RobloxThrowBotApp:
                 time.sleep(0.02)
                 continue
 
-            # =================================================================
-            # 8) ESCANEANDO O MAPA / SAINDO DE TELA POLUÍDA POR MOBS GIGANTES
-            # =================================================================
+            # 8) ESCANEANDO O MAPA / SAINDO DE TELA POLUÍDA
             self.release_all_keys()
             if info["is_screen_cluttered"]:
                 self.state = "LIMPANDO_VISAO_POLUIDA"
-                self.escape_cluttered_spawn_maneuver()
+                self.escape_cluttered_spawn_maneuver(clutter_attempt)
+                clutter_attempt += 1
             else:
                 self.state = "BUSCANDO_ROTA_NO_MAPA"
                 turn_key = "right" if self.config["turn_dir"] == "right" else "left"
