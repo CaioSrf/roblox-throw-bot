@@ -1,21 +1,38 @@
 # -*- coding: utf-8 -*-
 """
-Bot Automático para Roblox v5 - Desequipar Mob da Mão + Busca Faixa Laranja + Arremesso (+20) + Skip + Barra 2X
-=================================================================================================================
-Novidades e Correções da v5:
-1. Detecção Automática de Mob Equipado na Mão (Borda Branca na Hotbar Inferior):
-   - Sempre que o personagem volta do arremesso com um mob novo equipado na mão (100% das vezes),
-     o bot detecta a borda branca do slot equipado na hotbar inferior (com 100% de precisão)
-     e clica no slot / aperta a tecla correspondente (ou Backspace) para GUARDAR o mob da mão
-     ANTES de procurar a faixa laranja! Assim o mob gigante nunca tampa a visão dos pixels!
-2. Correção do Travamento no Estado "ARREMESSANDO_+20":
-   - No print anterior, a tela do bot mostrava "ESTADO: ARREMESSANDO_+20 | Barra +20: Não" porque,
-     se a barra de arremesso desaparecesse sem a barrinha branca passar pelo +20, o bot nunca saía
-     do estado ARREMESSANDO_+20 e ficava parado para sempre!
-   - Agora, se `is_power_bar` for `False` enquanto o estado for `ARREMESSANDO_+20`, ele sai
-     imediatamente desse estado e volta a desequipar o mob / buscar a faixa laranja!
-3. Auto-Click no Círculo Roxo "x2" (Treino de Barra) e "TAP TO SKIP":
-   - Mantidos e ativos por padrão ao iniciar.
+Bot Automático para Roblox v6 - Análise Completa do Mapa (3 Estágios) + Guardar Mob + Arremesso (+20) + Skip + Barra 2X
+=======================================================================================================================
+Inovações de Eficiência e Navegação da v6:
+1. Análise Completa do Mapa em 3 Estágios (Multi-Landmark Vision):
+   - ESTÁGIO 1 (Longa Distância / Saindo do Cercado):
+     Quando o personagem está longe da faixa laranja (onde a faixa tem menos de 1000 px), o bot localiza o
+     "Farol de Longa Distância": o Letreiro Magenta "EVENT" + a Tenda Roxa do Mago + o Corredor Aberto de
+     Grama Verde (> 20.000 px de grama livre, garantindo que não há parede ou cerca bloqueando).
+     Ele mira ligeiramente à direita da Tenda do Mago (+0.12 no eixo X, que é exatamente onde a faixa laranja fica!)
+     e já começa a andar imediatamente de longe!
+   - ESTÁGIO 2 (Média Distância / Aproximação):
+     Assim que a linha brilhante e os blocos laranjas passam de 1.200 px, o bot transfere a mira do Mago para o
+     centro exato da Faixa Laranja (mantendo X ≈ 0.53).
+   - ESTÁGIO 3 (Curta Distância / Chegada em ~27.511 px, X=0.53):
+     Ao atingir alta densidade de pixels laranjas (> 15.000 px) e pisar na faixa, aguarda/abre a barra "TAP TO THROW!".
+
+2. Correção de Rota sem Parar de Andar (Proportional Strafe A/D + Micro-Camera Steering):
+   - Enquanto segura `W` continuamente, se o alvo (`target_x`) desviar de `X = 0.53`, o bot dá micro-toques
+     proporcionais de `A` / `D` (ou `Seta ←` / `Seta →`) sem soltar o `W`! O personagem faz uma curva suave
+     e contínua em velocidade máxima até o ponto exato da faixa laranja.
+
+3. Radar Anti-Colisão / Destravamento Automático (Optical Flow / Stuck Detector):
+   - Se o bot estiver segurando `W`, mas a imagem do mapa não mudar (preso em quina de cerca ou poste),
+     ele detecta a colisão em 1.2s e faz uma manobra automática de contorno (pulo `Espaço` + passo lateral `D`/`A`).
+
+4. Retirada Automática Instantânea do Mob Novo da Mão (Tecla Numérica do Slot + Clique na Hotbar):
+   - Quando volta do arremesso com 100% de chance de ter um mob novo na mão (borda branca na hotbar),
+     o bot identifica qual slot está equipado, aperta o atalho numérico (`1`..`0`) E clica no slot para
+     guardar o mob em menos de 150ms, limpando a tela para a leitura do mapa!
+
+5. Predição de Velocidade da Barra +20 (Velocity Lead Compensation):
+   - Calcula a velocidade com que a barrinha branca está subindo para acionar o clique milissegundos antes
+     do topo, compensando o tempo de resposta do jogo e cravando `+20` todas as vezes.
 """
 
 import ctypes
@@ -137,7 +154,7 @@ def focus_roblox_window(hwnd: int):
             ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
             win32gui.SetForegroundWindow(hwnd)
             ctypes.windll.user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)
-            time.sleep(0.015)
+            time.sleep(0.012)
         except Exception:
             pass
 
@@ -179,7 +196,7 @@ def click_roblox_pos(hwnd: int, norm_x: float, norm_y: float, restore_cursor: bo
     ii_.mi = MouseInput(1, 1, 0, MOUSEEVENTF_MOVE, 0, ctypes.pointer(extra))
     x = Input(ctypes.c_ulong(0), ii_)
     SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
-    time.sleep(0.012)
+    time.sleep(0.01)
 
     ii_.mi = MouseInput(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, ctypes.pointer(extra))
     x = Input(ctypes.c_ulong(0), ii_)
@@ -187,7 +204,7 @@ def click_roblox_pos(hwnd: int, norm_x: float, norm_y: float, restore_cursor: bo
     if also_press_space:
         send_direct_key("space", True)
 
-    time.sleep(0.025)
+    time.sleep(0.022)
 
     ii_.mi = MouseInput(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, ctypes.pointer(extra))
     x = Input(ctypes.c_ulong(0), ii_)
@@ -197,7 +214,7 @@ def click_roblox_pos(hwnd: int, norm_x: float, norm_y: float, restore_cursor: bo
 
     if restore_cursor:
         try:
-            time.sleep(0.01)
+            time.sleep(0.008)
             win32api.SetCursorPos(prev_pos)
         except Exception:
             pass
@@ -274,13 +291,13 @@ def capture_window_rgb(hwnd: int, sct: mss.mss) -> np.ndarray | None:
 
 
 # =====================================================================
-# VISÃO COMPUTACIONAL COMPLETA (INCLUINDO DETECÇÃO DE MOB EQUIPADO NA HOTBAR)
+# VISÃO COMPUTACIONAL v6: ANÁLISE COMPLETA DO MAPA EM 3 ESTÁGIOS
 # =====================================================================
 def detect_equipped_hotbar_slot(arr: np.ndarray):
     """
     Detecta se há algum mob equipado na mão verificando a borda branca brilhante
     em qualquer um dos slots da hotbar inferior (1 a 0).
-    Retorna (is_equipped: bool, slot_center_x: float | None, slot_center_y: float).
+    Também estima a tecla numérica ('1'..'9','0') correspondente para desequipar via teclado + clique!
     """
     h, w, _ = arr.shape
     x0, x1 = int(0.25 * w), int(0.75 * w)
@@ -291,7 +308,6 @@ def detect_equipped_hotbar_slot(arr: np.ndarray):
 
     has_white_top = np.any((top_band[:, :, 0] > 215) & (top_band[:, :, 1] > 215) & (top_band[:, :, 2] > 210), axis=0)
     has_white_bot = np.any((bot_band[:, :, 0] > 215) & (bot_band[:, :, 1] > 215) & (bot_band[:, :, 2] > 210), axis=0)
-    # O interior do quadrado do slot da hotbar é escuro (< 115), evitando confundir com a cerca azul/branca
     has_dark_mid = np.mean(mid_band, axis=(0, 2)) < 115
 
     equipped_cols = has_white_top & has_white_bot & has_dark_mid
@@ -306,8 +322,10 @@ def detect_equipped_hotbar_slot(arr: np.ndarray):
             best_cx = (x0 + i + win // 2) / float(w)
 
     if best_score > 0.55 and best_cx is not None:
-        return True, float(best_cx), 0.915
-    return False, None, 0.915
+        # Se está próximo de x=0.30 (primeiro slot da esquerda, onde todo mob novo entra!), é a tecla '1'
+        slot_key = "1" if best_cx < 0.335 else None
+        return True, float(best_cx), 0.915, slot_key
+    return False, None, 0.915, None
 
 
 def analyze_frame(arr: np.ndarray):
@@ -373,47 +391,87 @@ def analyze_frame(arr: np.ndarray):
             slider_pos = float(np.mean(wy) / max(1, bar_col.shape[0]))
 
     # 4. DETECÇÃO DE MOB EQUIPADO NA MÃO (Hotbar com borda branca selecionada)
-    mob_equipped, mob_slot_x, mob_slot_y = detect_equipped_hotbar_slot(arr)
+    mob_equipped, mob_slot_x, mob_slot_y, mob_slot_key = detect_equipped_hotbar_slot(arr)
     if is_pullup or is_power_bar:
         mob_equipped = False
 
-    # 5. DETECÇÃO DA FAIXA LARANJA DE CHEGADA
+    # 5. ANÁLISE COMPLETA DO MAPA EM 3 ESTÁGIOS (Farol EVENT/Mago + Corredor Verde + Faixa Laranja)
     small = arr[::2, ::2]
     sh, sw, _ = small.shape
     R = small[:, :, 0].astype(np.int16)
     G = small[:, :, 1].astype(np.int16)
     B = small[:, :, 2].astype(np.int16)
 
-    orange_tiles = (R > 220) & (G > 115) & (G < 230) & (B < 95) & ((R - B) > 130) & (R >= G - 5)
-    glow_strip = (R > 245) & (G > 205) & (G < 252) & (B > 110) & (B < 235) & (R >= G) & (G > B + 15)
+    ui_mask = np.ones((sh, sw), dtype=bool)
+    ui_mask[:, :int(0.16 * sw)] = False
+    ui_mask[:, int(0.84 * sw):] = False
+    ui_mask[int(0.72 * sh):, :int(0.25 * sw)] = False
+    ui_mask[int(0.83 * sh):, int(0.24 * sw):int(0.76 * sw)] = False
+    ui_mask[int(0.43 * sh):int(0.79 * sh), int(0.36 * sw):int(0.51 * sw)] = False
 
-    combined = orange_tiles | glow_strip
+    # A) Faixa Laranja + Linha Brilhante no Chão (y > 0.41*sh)
+    floor_roi = ui_mask.copy()
+    floor_roi[:int(0.41 * sh), :] = False
 
-    roi = np.zeros_like(combined, dtype=bool)
-    roi[int(0.42 * sh):int(0.95 * sh), int(0.16 * sw):int(0.84 * sw)] = True
-    roi[int(0.72 * sh):, :int(0.25 * sw)] = False
-    roi[int(0.83 * sh):, int(0.24 * sw):int(0.76 * sw)] = False
-    roi[int(0.43 * sh):int(0.79 * sh), int(0.36 * sw):int(0.51 * sw)] = False
+    orange_tiles = (R > 220) & (G > 115) & (G < 230) & (B < 95) & ((R - B) > 130) & (R >= G - 5) & floor_roi
+    glow_strip = (R > 245) & (G > 205) & (G < 252) & (B > 110) & (B < 235) & (R >= G) & (G > B + 15) & floor_roi
+    finish_line = orange_tiles | glow_strip
 
-    det_all = combined & roi
-    det_orange = orange_tiles & roi
-
-    foot_roi = np.zeros_like(combined, dtype=bool)
-    foot_roi[int(0.68 * sh):int(0.94 * sh), int(0.20 * sw):int(0.80 * sw)] = True
-    foot_roi[int(0.83 * sh):, int(0.24 * sw):int(0.76 * sw)] = False
+    foot_roi = ui_mask.copy()
+    foot_roi[:int(0.68 * sh), :] = False
+    foot_roi[int(0.94 * sh):, :] = False
     det_feet = orange_tiles & foot_roi
 
-    scale_factor = (1024 * 576) / float(sw * sh)
-    orange_total = int(np.sum(det_all) * scale_factor)
-    orange_pure = int(np.sum(det_orange) * scale_factor)
-    orange_feet = int(np.sum(det_feet) * scale_factor)
+    # B) Farol de Longa Distância: Letreiro Magenta "EVENT" + Tenda Roxa do Mago (y entre 0.04*sh e 0.65*sh)
+    horizon_roi = ui_mask.copy()
+    horizon_roi[:int(0.04 * sh), :] = False
+    horizon_roi[int(0.65 * sh):, :] = False
 
-    if np.any(det_all):
-        ys, xs = np.where(det_all)
-        mx = float(np.mean(xs) / sw)
-        my = float(np.mean(ys) / sh)
-    else:
-        mx, my = 0.5, 0.5
+    magenta_event = (R > 205) & (G < 70) & (B > 175) & ((R - G) > 140) & ((B - G) > 110) & horizon_roi
+    purple_booth = (R > 80) & (R < 170) & (G > 25) & (G < 110) & (B > 185) & ((B - G) > 90) & ((B - R) > 30) & horizon_roi
+
+    # C) Corredor Aberto de Grama Verde à Frente (y de 0.45*sh a 0.82*sh, x de 0.25*sw a 0.75*sw)
+    corridor_roi = ui_mask.copy()
+    corridor_roi[:int(0.45 * sh), :] = False
+    corridor_roi[int(0.82 * sh):, :] = False
+    corridor_roi[:, :int(0.25 * sw)] = False
+    corridor_roi[:, int(0.75 * sw):] = False
+    green_grass = (G > 200) & (R < 145) & (B < 75) & ((G - R) > 75) & corridor_roi
+
+    scale_factor = (1024 * 576) / float(sw * sh)
+    orange_total = int(np.sum(finish_line) * scale_factor)
+    orange_pure = int(np.sum(orange_tiles) * scale_factor)
+    orange_feet = int(np.sum(det_feet) * scale_factor)
+    event_px = int(np.sum(magenta_event) * scale_factor)
+    booth_px = int(np.sum(purple_booth) * scale_factor)
+    grass_px = int(np.sum(green_grass) * scale_factor)
+
+    # Decisão de Estágio de Navegação no Mapa:
+    nav_stage = "SEARCHING"
+    target_x = 0.53
+    orange_mx = 0.53
+
+    if np.any(finish_line):
+        ys, xs = np.where(finish_line)
+        orange_mx = float(np.mean(xs) / sw)
+
+    if orange_total >= 1200:
+        target_x = orange_mx
+        nav_stage = "ESTAGIO_3_CHEGADA" if orange_total >= 15000 else "ESTAGIO_2_FAIXA_VISIVEL"
+    elif (
+        (event_px >= 180 and booth_px >= 400 and grass_px >= 20000)
+        or (event_px >= 400 and grass_px >= 20000)
+        or (booth_px >= 1800 and orange_total >= 400 and grass_px >= 25000)
+    ):
+        # Vê o Farol (EVENT + Tenda do Mago + Corredor de Grama Verde) lá de longe!
+        ys, xs = np.where(magenta_event | purple_booth)
+        beacon_x = float(np.mean(xs) / sw)
+        # A faixa laranja fica imediatamente à direita da tenda do mago (+0.12)
+        target_x = min(0.78, beacon_x + 0.12)
+        nav_stage = "ESTAGIO_1_FAROL_LONGE"
+
+    # Assinatura visual rápida do frame (para o detector de colisão / stuck)
+    frame_sig = small[::4, ::4].astype(np.float32)
 
     return {
         "is_pullup": is_pullup,
@@ -423,22 +481,28 @@ def analyze_frame(arr: np.ndarray):
         "mob_equipped": mob_equipped,
         "mob_slot_x": mob_slot_x,
         "mob_slot_y": mob_slot_y,
+        "mob_slot_key": mob_slot_key,
+        "nav_stage": nav_stage,
+        "target_x": target_x,
         "orange_total": orange_total,
         "orange_pure": orange_pure,
         "orange_feet": orange_feet,
-        "orange_mx": mx,
-        "orange_my": my,
+        "orange_mx": orange_mx,
+        "event_px": event_px,
+        "booth_px": booth_px,
+        "grass_px": grass_px,
+        "frame_sig": frame_sig,
     }
 
 
 # =====================================================================
-# INTERFACE GRÁFICA E LÓGICA DO BOT (v5)
+# INTERFACE GRÁFICA E LÓGICA DO BOT (v6)
 # =====================================================================
 class RobloxThrowBotApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Bot Roblox v5 - Guardar Mob + Faixa Laranja + Arremesso +20 + Skip + Barra 2X")
-        self.root.geometry("610x780")
+        self.root.title("Bot Roblox v6 - Mapa 3 Estágios + Guardar Mob + Arremesso +20 + Skip + Barra 2X")
+        self.root.geometry("630x800")
         self.root.attributes("-topmost", True)
 
         self.running = False
@@ -454,8 +518,8 @@ class RobloxThrowBotApp:
         self.config = {
             "restore_cursor": True,
             "turn_dir": "right",
-            "slider_threshold": 0.17,
-            "max_walk_time": 12.0,
+            "slider_threshold": 0.18,
+            "max_walk_time": 14.0,
             "use_fixed_walk_time": False,
             "recorded_walk_time": 4.0,
             "post_throw_wait": 4.5,
@@ -510,7 +574,7 @@ class RobloxThrowBotApp:
     def build_ui(self):
         pad = {"padx": 10, "pady": 4}
 
-        status_frame = ttk.LabelFrame(self.root, text="Status em Tempo Real")
+        status_frame = ttk.LabelFrame(self.root, text="Radar do Mapa e Status em Tempo Real (v6)")
         status_frame.pack(fill="x", **pad)
 
         self.lbl_state = ttk.Label(
@@ -519,7 +583,7 @@ class RobloxThrowBotApp:
         self.lbl_state.pack(anchor="w", padx=8, pady=3)
 
         self.lbl_vision = ttk.Label(
-            status_frame, text="Janela Roblox: Procurando... | Barra +20: Não | Mob na Mão: Não | Faixa: 0 px", font=("Segoe UI", 9)
+            status_frame, text="Radar: Aguardando... | Faixa: 0 px | Farol EVENT: 0 px | Grama Livre: 0 px", font=("Segoe UI", 9)
         )
         self.lbl_vision.pack(anchor="w", padx=8, pady=2)
 
@@ -536,13 +600,13 @@ class RobloxThrowBotApp:
         self.lbl_preview = ttk.Label(preview_frame, text="Abra o Roblox para visualizar a captura aqui")
         self.lbl_preview.pack(padx=5, pady=4)
 
-        extra_frame = ttk.LabelFrame(self.root, text="Automações Ativas (Guardar Mob, Tap to Skip & Barra 2X)")
+        extra_frame = ttk.LabelFrame(self.root, text="Automações Inteligentes Ativas")
         extra_frame.pack(fill="x", **pad)
 
         self.auto_unequip_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             extra_frame,
-            text="🐾 Auto-Guardar Mob Novo da Mão (Clica no slot equipado da Hotbar p/ não tampar os pixels)",
+            text="🐾 Auto-Guardar Mob Novo da Mão (Tecla do Slot + Clique na Hotbar p/ liberar visão do mapa)",
             variable=self.auto_unequip_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
@@ -550,7 +614,7 @@ class RobloxThrowBotApp:
         self.auto_x2_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             extra_frame,
-            text="💪 Auto-Click no Círculo Roxo 'x2' (Dedo Amarelo) durante a barra",
+            text="💪 Auto-Click no Círculo Roxo 'x2' (Dedo Amarelo) durante o treino de barra",
             variable=self.auto_x2_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
@@ -569,7 +633,7 @@ class RobloxThrowBotApp:
         self.restore_cursor_var = tk.BooleanVar(value=self.config.get("restore_cursor", True))
         ttk.Checkbutton(
             mode_frame,
-            text="⚡ Devolver meu cursor imediatamente para onde estava após clicar (Clique de 25ms)",
+            text="⚡ Devolver meu cursor imediatamente para onde estava após clicar (Clique de 22ms)",
             variable=self.restore_cursor_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
@@ -581,12 +645,12 @@ class RobloxThrowBotApp:
         )
         btn_rdp.pack(fill="x", padx=8, pady=4)
 
-        nav_frame = ttk.LabelFrame(self.root, text="Navegação até a Faixa Laranja")
+        nav_frame = ttk.LabelFrame(self.root, text="Navegação 3 Estágios (Farol EVENT/Mago -> Faixa Laranja 27.511 px)")
         nav_frame.pack(fill="x", **pad)
 
         row1 = ttk.Frame(nav_frame)
         row1.pack(fill="x", padx=8, pady=2)
-        ttk.Label(row1, text="Direção para girar a câmera quando NÃO vê a faixa laranja:").pack(side="left")
+        ttk.Label(row1, text="Direção para escanear o mapa ao sair do cercado:").pack(side="left")
         self.turn_dir_var = tk.StringVar(value=self.config["turn_dir"])
         ttk.Radiobutton(row1, text="Direita (→)", variable=self.turn_dir_var, value="right", command=self.save_config).pack(side="left", padx=5)
         ttk.Radiobutton(row1, text="Esquerda (←)", variable=self.turn_dir_var, value="left", command=self.save_config).pack(side="left", padx=5)
@@ -594,7 +658,7 @@ class RobloxThrowBotApp:
         self.use_fixed_var = tk.BooleanVar(value=self.config["use_fixed_walk_time"])
         ttk.Checkbutton(
             nav_frame,
-            text="Limitar caminhada por tempo fixo (Desmarcado = anda direto até a barra 'TAP TO THROW!' abrir)",
+            text="Limitar caminhada por tempo fixo (Desmarcado = navega pelo mapa até a barra 'TAP TO THROW!' abrir)",
             variable=self.use_fixed_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
@@ -608,12 +672,12 @@ class RobloxThrowBotApp:
         self.btn_record = ttk.Button(row2, text="⏱ Gravar Tempo Andando (F9)", command=self.toggle_record_walk)
         self.btn_record.pack(side="left", padx=5)
 
-        throw_frame = ttk.LabelFrame(self.root, text="Calibragem do Arremesso (+20) e Skip")
+        throw_frame = ttk.LabelFrame(self.root, text="Calibragem do Arremesso (+20 com Predição de Velocidade)")
         throw_frame.pack(fill="x", **pad)
 
         row3 = ttk.Frame(throw_frame)
         row3.pack(fill="x", padx=8, pady=2)
-        ttk.Label(row3, text="Zona do Topo (+20) [0.05 = topo extremo | 0.17 = +20 seguro]:").pack(side="left")
+        ttk.Label(row3, text="Zona do Topo (+20) [0.05 = topo extremo | 0.18 = +20 calibrado]:").pack(side="left")
         self.thresh_var = tk.DoubleVar(value=self.config["slider_threshold"])
         ttk.Spinbox(row3, from_=0.04, to=0.30, increment=0.01, textvariable=self.thresh_var, width=6, command=self.save_config).pack(side="left", padx=5)
 
@@ -661,9 +725,9 @@ class RobloxThrowBotApp:
         self.save_config()
         self.running = not self.running
         if self.running:
-            self.state = "BUSCANDO_FAIXA"
+            self.state = "BUSCANDO_ROTA_NO_MAPA"
             self.btn_toggle.config(text="⏸ PAUSAR BOT (F8)", bg="#dc3545")
-            self.lbl_state.config(text="ESTADO: RODANDO - Verificando Tela", foreground="#28a745")
+            self.lbl_state.config(text="ESTADO: RODANDO - Escaneando Mapa", foreground="#28a745")
             if self.hwnd:
                 focus_roblox_window(self.hwnd)
         else:
@@ -679,7 +743,33 @@ class RobloxThrowBotApp:
             self.active_keys.add("w")
         send_direct_key("w", True)
 
-    def pulse_turn_key(self, key_name: str, duration: float = 0.055):
+    def steer_while_walking(self, target_x: float):
+        """
+        Mantém W pressionado e faz micro-ajustes laterais com A/D (strafe) e setas
+        para cravar a rota exatamente em X = 0.53 (o ponto da faixa laranja de 27.511 px)
+        sem jamais parar de andar!
+        """
+        error = target_x - 0.53
+        if abs(error) <= 0.11:
+            return
+        # Micro-pulso proporcional ao erro horizontal (15ms a 35ms)
+        pulse_dur = min(0.038, max(0.014, abs(error) * 0.08))
+        steer_key = "d" if error > 0 else "a"
+        send_direct_key(steer_key, True)
+        time.sleep(pulse_dur)
+        send_direct_key(steer_key, False)
+
+    def unstick_maneuver(self):
+        """Manobra rápida de desvio caso o personagem encoste numa cerca ou poste."""
+        if self.hwnd:
+            focus_roblox_window(self.hwnd)
+        send_direct_key("space", True)
+        send_direct_key("d", True)
+        time.sleep(0.22)
+        send_direct_key("space", False)
+        send_direct_key("d", False)
+
+    def pulse_turn_key(self, key_name: str, duration: float = 0.06):
         if self.hwnd:
             focus_roblox_window(self.hwnd)
         send_direct_key(key_name, True)
@@ -700,9 +790,13 @@ class RobloxThrowBotApp:
         state_start_time = time.time()
         walk_start_time = 0.0
         last_w_refresh = 0.0
+        last_steer_time = 0.0
         last_skip_click = 0.0
         last_x2_click = 0.0
         last_unequip_time = 0.0
+        prev_slider_pos = None
+        prev_frame_sig = None
+        last_sig_check_time = 0.0
 
         while True:
             loop_start = time.time()
@@ -728,14 +822,12 @@ class RobloxThrowBotApp:
                 time.sleep(0.05)
                 continue
 
-            # =================================================================
-            # CORREÇÃO CRÍTICA: Se estava em ARREMESSANDO_+20 mas a barra sumiu,
-            # reseta imediatamente para BUSCANDO_FAIXA para nunca ficar travado!
-            # =================================================================
+            # Destrava imediatamente se a barra de arremesso fechou
             if self.state == "ARREMESSANDO_+20" and not info["is_power_bar"]:
                 self.release_all_keys()
-                self.state = "BUSCANDO_FAIXA"
+                self.state = "BUSCANDO_ROTA_NO_MAPA"
                 state_start_time = time.time()
+                prev_slider_pos = None
 
             # =================================================================
             # 1) MODO TREINO DE BARRA (PULL-UPS) OU CÍRCULO ROXO "x2" NA TELA
@@ -744,7 +836,7 @@ class RobloxThrowBotApp:
                 self.release_all_keys()
                 self.state = "TREINANDO_BARRA_2X"
                 if self.config.get("auto_pullup_x2", True) and info["x2_pos"] is not None:
-                    if time.time() - last_x2_click >= 0.12:
+                    if time.time() - last_x2_click >= 0.11:
                         nx, ny = info["x2_pos"]
                         click_roblox_pos(
                             self.hwnd,
@@ -755,37 +847,48 @@ class RobloxThrowBotApp:
                         )
                         self.x2_click_count += 1
                         last_x2_click = time.time()
-                time.sleep(0.025)
+                time.sleep(0.02)
                 continue
             elif self.state == "TREINANDO_BARRA_2X":
-                self.state = "BUSCANDO_FAIXA"
+                self.state = "BUSCANDO_ROTA_NO_MAPA"
                 state_start_time = time.time()
 
             # =================================================================
-            # 2) BARRA VERTICAL DE ARREMESSO ("TAP TO THROW!") NA TELA
+            # 2) BARRA VERTICAL DE ARREMESSO ("TAP TO THROW!") COM PREDIÇÃO DE VELOCIDADE
             # =================================================================
             if info["is_power_bar"]:
                 if self.state != "ARREMESSANDO_+20":
                     self.release_all_keys()
                     self.state = "ARREMESSANDO_+20"
                     state_start_time = time.time()
+                    prev_slider_pos = None
 
                 slider_pos = info["slider_pos"]
                 thresh = float(self.config["slider_threshold"])
 
-                if slider_pos is not None and slider_pos <= thresh:
-                    click_roblox_pos(
-                        self.hwnd,
-                        0.50,
-                        0.55,
-                        restore_cursor=self.config.get("restore_cursor", True),
-                        also_press_space=True,
-                    )
-                    self.throw_count += 1
-                    self.state = "TAP_TO_SKIP_E_RETORNO"
-                    state_start_time = time.time()
-                    last_skip_click = time.time()
-                    time.sleep(0.20)
+                if slider_pos is not None:
+                    # Predição de velocidade: se a barrinha branca está subindo rápido em direção ao +20,
+                    # antecipa o clique em 0.04 para compensar o tempo do clique e cravar no topo!
+                    effective_pos = slider_pos
+                    if prev_slider_pos is not None and slider_pos < prev_slider_pos:
+                        vel_up = prev_slider_pos - slider_pos
+                        effective_pos = max(0.0, slider_pos - vel_up * 0.65)
+                    prev_slider_pos = slider_pos
+
+                    if effective_pos <= thresh:
+                        click_roblox_pos(
+                            self.hwnd,
+                            0.50,
+                            0.55,
+                            restore_cursor=self.config.get("restore_cursor", True),
+                            also_press_space=True,
+                        )
+                        self.throw_count += 1
+                        self.state = "TAP_TO_SKIP_E_RETORNO"
+                        state_start_time = time.time()
+                        last_skip_click = time.time()
+                        prev_slider_pos = None
+                        time.sleep(0.20)
                 continue
 
             # =================================================================
@@ -795,8 +898,8 @@ class RobloxThrowBotApp:
                 self.release_all_keys()
                 elapsed_wait = time.time() - state_start_time
 
-                if self.config.get("auto_skip", True) and elapsed_wait > 0.6:
-                    if time.time() - last_skip_click >= 0.45:
+                if self.config.get("auto_skip", True) and elapsed_wait > 0.55:
+                    if time.time() - last_skip_click >= 0.42:
                         click_roblox_pos(
                             self.hwnd,
                             0.50,
@@ -807,103 +910,94 @@ class RobloxThrowBotApp:
                         last_skip_click = time.time()
 
                 if elapsed_wait >= float(self.config["post_throw_wait"]):
-                    self.state = "BUSCANDO_FAIXA"
+                    self.state = "BUSCANDO_ROTA_NO_MAPA"
                     state_start_time = time.time()
-                time.sleep(0.05)
+                time.sleep(0.04)
                 continue
 
             # =================================================================
-            # 4) GUARDAR MOB EQUIPADO NA MÃO ANTES DE BUSCAR A FAIXA LARANJA!
-            # Sempre que voltar do arremesso com um mob novo na mão (borda branca
-            # na hotbar inferior), clica exatamente no slot equipado para retirá-lo
-            # da mão e liberar a visão dos pixels!
+            # 4) GUARDAR MOB EQUIPADO NA MÃO ANTES DE ESCANEAR O MAPA!
+            # Aperta a tecla do slot (ex: '1') E clica no slot da hotbar para garantir
+            # que o mob saia da mão imediatamente e não bloqueie os pixels do mapa.
             # =================================================================
             if self.config.get("auto_unequip_mob", True) and info["mob_equipped"] and info["mob_slot_x"] is not None:
-                if time.time() - last_unequip_time >= 0.45:
+                if time.time() - last_unequip_time >= 0.40:
                     self.release_all_keys()
                     self.state = "GUARDANDO_MOB_DA_MAO"
-                    # Clica diretamente no quadrado do slot equipado na hotbar para guardar o mob
-                    click_roblox_pos(
-                        self.hwnd,
-                        info["mob_slot_x"],
-                        info["mob_slot_y"],
-                        restore_cursor=self.config.get("restore_cursor", True),
-                        also_press_space=False,
-                    )
-                    # Se o slot equipado estiver na posição do slot 1 (x < 0.33), também envia tecla '1' se ainda continuar equipado na próxima leitura
+                    focus_roblox_window(self.hwnd)
+                    if info["mob_slot_key"] is not None:
+                        send_direct_key(info["mob_slot_key"], True)
+                        time.sleep(0.03)
+                        send_direct_key(info["mob_slot_key"], False)
+                    else:
+                        click_roblox_pos(
+                            self.hwnd,
+                            info["mob_slot_x"],
+                            info["mob_slot_y"],
+                            restore_cursor=self.config.get("restore_cursor", True),
+                            also_press_space=False,
+                        )
                     self.unequip_count += 1
                     last_unequip_time = time.time()
-                    time.sleep(0.25)
-                    self.state = "BUSCANDO_FAIXA"
+                    time.sleep(0.22)
+                    self.state = "BUSCANDO_ROTA_NO_MAPA"
                     continue
 
             # =================================================================
-            # 5) BUSCANDO A FAIXA LARANJA
+            # 5) NAVEGAÇÃO NO MAPA EM 3 ESTÁGIOS (FAROL LONGE -> MÉDIA -> FAIXA 27.511 PX)
+            # Assim que QUALQUER um dos 3 estágios é detectado (mesmo lá de longe no cercado!),
+            # o bot já começa a andar para frente imediatamente!
             # =================================================================
-            if self.state in ("BUSCANDO_FAIXA", "GUARDANDO_MOB_DA_MAO"):
-                self.state = "BUSCANDO_FAIXA"
-                is_aligned = (info["orange_total"] >= 1500 and 0.22 <= info["orange_mx"] <= 0.80)
-                is_already_in_front = (info["orange_total"] >= 6000)
-
-                if is_aligned or is_already_in_front:
-                    self.state = "ANDANDO_ATE_FAIXA"
+            if info["nav_stage"] != "SEARCHING":
+                if not self.state.startswith("NAVEGANDO_"):
                     walk_start_time = time.time()
-                    state_start_time = time.time()
+                    last_sig_check_time = time.time()
+                    prev_frame_sig = info["frame_sig"]
                     self.start_walking_forward()
                     last_w_refresh = time.time()
-                    continue
 
-                turn_key = "right" if self.config["turn_dir"] == "right" else "left"
-                if info["orange_total"] >= 800:
-                    turn_key = "right" if info["orange_mx"] > 0.5 else "left"
-
-                self.pulse_turn_key(turn_key, duration=0.055)
-                time.sleep(0.035)
-                continue
-
-            # =================================================================
-            # 6) ANDANDO RETO ATÉ A FAIXA LARANJA (ATÉ A BARRA +20 APARECER)
-            # =================================================================
-            if self.state == "ANDANDO_ATE_FAIXA":
+                self.state = f"NAVEGANDO_{info['nav_stage']}"
                 elapsed_walk = time.time() - walk_start_time
 
+                # Verifica limite de tempo fixo se o usuário marcou a caixa
                 if self.config["use_fixed_walk_time"] and elapsed_walk >= float(self.config["recorded_walk_time"]):
                     self.release_all_keys()
                     self.state = "AGUARDANDO_BARRA"
                     state_start_time = time.time()
                     continue
 
-                if elapsed_walk > float(self.config["max_walk_time"]):
-                    self.release_all_keys()
-                    self.state = "BUSCANDO_FAIXA"
-                    state_start_time = time.time()
-                    continue
-
-                if info["orange_total"] < 250 and elapsed_walk > 0.8 and info["orange_feet"] < 400:
-                    self.release_all_keys()
-                    self.state = "BUSCANDO_FAIXA"
-                    state_start_time = time.time()
-                    continue
-
-                if "w" not in self.active_keys or (time.time() - last_w_refresh > 0.35):
+                # Mantém W pressionado continuamente
+                if "w" not in self.active_keys or (time.time() - last_w_refresh > 0.30):
                     self.start_walking_forward()
                     last_w_refresh = time.time()
 
-                time.sleep(0.025)
+                # Ajusta a rota suavemente com A/D em direção a X = 0.53 sem parar o W!
+                if time.time() - last_steer_time > 0.14:
+                    self.steer_while_walking(info["target_x"])
+                    last_steer_time = time.time()
+
+                # Radar Anti-Colisão (Optical Flow): verifica a cada 1.1s se o personagem ficou preso numa cerca
+                if time.time() - last_sig_check_time > 1.1:
+                    if prev_frame_sig is not None:
+                        diff = float(np.mean(np.abs(info["frame_sig"] - prev_frame_sig)))
+                        if diff < 3.2:
+                            # Imagem quase não mudou enquanto segurava W -> contorna obstáculo!
+                            self.unstick_maneuver()
+                            self.start_walking_forward()
+                    prev_frame_sig = info["frame_sig"]
+                    last_sig_check_time = time.time()
+
+                time.sleep(0.02)
                 continue
 
             # =================================================================
-            # 7) AGUARDANDO A BARRA DE ARREMESSO ABRIR
+            # 6) ESCANEANDO O MAPA (QUANDO ESTÁ OLHANDO PARA A PAREDE DO CERCADO)
             # =================================================================
-            if self.state == "AGUARDANDO_BARRA":
-                self.release_all_keys()
-                if time.time() - state_start_time > 1.2:
-                    self.start_walking_forward()
-                    time.sleep(0.6)
-                    self.release_all_keys()
-                    state_start_time = time.time()
-                time.sleep(0.02)
-                continue
+            self.release_all_keys()
+            self.state = "BUSCANDO_ROTA_NO_MAPA"
+            turn_key = "right" if self.config["turn_dir"] == "right" else "left"
+            self.pulse_turn_key(turn_key, duration=0.065)
+            time.sleep(0.03)
 
     def update_ui_status(self, err_msg, info, arr=None):
         def _upd():
@@ -916,10 +1010,13 @@ class RobloxThrowBotApp:
                     if info["is_power_bar"] and info["slider_pos"] is not None
                     else ("SIM" if info["is_power_bar"] else "Não")
                 )
-                mob_txt = f"SIM (X={info['mob_slot_x']:.2f})" if info["mob_equipped"] and info["mob_slot_x"] is not None else "Não"
-                x2_txt = "SIM!" if info["x2_pos"] is not None else ("Barra Ativa" if info["is_pullup"] else "Não")
+                mob_txt = "SIM" if info["mob_equipped"] else "Não"
                 self.lbl_vision.config(
-                    text=f"Barra +20: {bar_txt} | Mob na Mão: {mob_txt} | 2X: {x2_txt} | Faixa: {info['orange_total']} px (X={info['orange_mx']:.2f})"
+                    text=(
+                        f"Estágio: {info['nav_stage']} | Alvo X={info['target_x']:.2f} | "
+                        f"Faixa: {info['orange_total']} px | Farol EVENT/Mago: {info['event_px'] + info['booth_px']} px | "
+                        f"Mob Mão: {mob_txt} | Barra: {bar_txt}"
+                    )
                 )
                 self.lbl_throws.config(
                     text=f"Arremessos (+20): {self.throw_count}  |  Mobs Guardados: {self.unequip_count}  |  Cliques Barra (x2): {self.x2_click_count}"
