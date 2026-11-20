@@ -1,0 +1,11 @@
+<Configuration>
+  <VGpu>Enable</VGpu>
+  <Networking>Enable</Networking>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>C:\Users\caios\.gemini\antigravity\scratch\roblox_throw_bot</HostFolder>
+      <SandboxFolder>C:\Users\WDAGUtilityAccount\Desktop\roblox_throw_bot</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+</Configuration>

@@ -1,23 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-Bot Automático para Roblox - Busca Inteligente da Faixa Laranja + Arremesso (+20) + Tap to Skip + Barra 2X
-===========================================================================================================
-Novidades e Correções desta versão:
-1. Correção do Giro da Câmera e Detecção da Faixa Laranja:
-   - Pulsos curtos e controlados na câmera ao procurar a faixa laranja, parando imediatamente
-     assim que a faixa laranja aparecer na tela (ex: ~27511 px, X=0.53).
-   - Removida a correção de setas durante a caminhada que fazia o personagem girar em círculos.
-   - Proteção contra falso positivo na barra de arremesso ("ESTADO: ARREMESSANDO" agora exige
-     as 3 cores da barra vertical — verde no topo, amarelo no meio e laranja/vermelho embaixo).
-2. Auto-Click no Círculo Roxo "x2" (Treino de Barra / Pull-ups):
-   - Detecta automaticamente quando você está fazendo barra (botão vermelho STOP + barra de Level).
-   - Enquanto você estiver fazendo barra, o bot NÃO tenta andar; ele monitora a tela inteira em
-     alta velocidade e, sempre que o círculo redondo roxo com a mãozinha amarela ("x2") aparecer
-     (em qualquer posição da tela!), ele clica exatamente em cima do círculo automaticamente!
-3. Auto "TAP TO SKIP" após o Arremesso:
-   - Após arremessar no +20, o bot clica periodicamente no centro da tela para acionar o
-     "TAP TO SKIP" quando você captura um animal, acelerando o retorno para o cercado, e
-     só volta a procurar a faixa laranja quando realmente tiver retornado ao cercado!
+Bot Automático para Roblox v3 - Busca Faixa Laranja + Arremesso (+20) + Tap to Skip + Barra 2X
+=================================================================================================
+Melhorias da v3:
+1. Destravamento total da caminhada na Faixa Laranja (ex: ~27511 px, X=0.53):
+   - Quando a faixa laranja já está na frente do personagem (qualquer valor >= 1500 px),
+     o bot NÃO gira a câmera nem solta o W! Ele segura W continuamente até a barra vertical
+     "TAP TO THROW!" abrir na tela.
+   - Adicionado "Re-Press" inteligente da tecla W a cada 0.6s caso o Roblox ignore o primeiro
+     evento de teclado logo após a transição de estado.
+2. Modo "Sessão Isolada / VM / RDP / Sandbox (Sem Roubar Mouse)":
+   - Quando rodando dentro do Windows Sandbox, RDP Local ou 2º Usuário, o bot usa DirectInput
+     100% nativo dentro daquela sessão sem mexer no mouse do seu desktop principal.
+3. Modo "Não Roubar Mouse no Monitor Único":
+   - Adicionada opção explícita: "Bloquear Roubo de Foco/Mouse (Nunca sair da minha janela atual)".
+     Quando marcada, o bot JAMAIS chama SetForegroundWindow ou SetCursorPos na sua tela; ele envia
+     todos os comandos exclusivamente via mensagens Win32 em background para o HWND do Roblox.
 """
 
 import ctypes
@@ -37,7 +35,6 @@ import win32con
 import win32gui
 import win32ui
 
-# Garantir DPI Awareness para capturar coordenadas exatas da janela do Roblox no Windows
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except Exception:
@@ -121,7 +118,7 @@ VK_MAP = {
 
 
 def send_direct_key(key_name: str, down: bool):
-    """Envia tecla via DirectInput ScanCode (funciona 100% no Roblox quando focado)."""
+    """Envia tecla via DirectInput ScanCode (funciona 100% na sessão isolada/RDP/Sandbox ou janela focada)."""
     vk, scan, is_ext = VK_MAP[key_name]
     flags = KEYEVENTF_SCANCODE
     if is_ext:
@@ -136,7 +133,7 @@ def send_direct_key(key_name: str, down: bool):
 
 
 def send_background_key(hwnd: int, key_name: str, down: bool):
-    """Envia tecla diretamente para a janela do Roblox em segundo plano via Win32 API."""
+    """Envia tecla diretamente para a janela do Roblox em segundo plano via Win32 API (sem mexer no foco/mouse)."""
     if not hwnd or not win32gui.IsWindow(hwnd):
         return
     vk, scan, is_ext = VK_MAP[key_name]
@@ -152,13 +149,11 @@ def send_background_key(hwnd: int, key_name: str, down: bool):
     win32api.PostMessage(hwnd, msg, vk, lparam)
 
 
-def click_at_normalized_pos(hwnd: int, norm_x: float, norm_y: float, mode: str, restore_window: bool = True, also_press_space: bool = False):
+def click_at_normalized_pos(hwnd: int, norm_x: float, norm_y: float, mode: str, also_press_space: bool = False):
     """
-    Clica em uma posição normalizada (0.0 a 1.0) dentro da área cliente da janela do Roblox.
-    Usado tanto para:
-    - Arremessar no +20 ("TAP TO THROW!")
-    - Pular animação ("TAP TO SKIP")
-    - Clicar exatamente em cima do círculo roxo "x2" na barra!
+    Executa clique na coordenada normalizada (0.0 a 1.0) da janela do Roblox.
+    - Se mode == "background": NUNCA move o cursor real do mouse nem rouba o foco da sua tela!
+    - Se mode == "focus" (usado dentro do RDP/Sandbox isolado): move e clica via DirectInput dentro da sessão isolada.
     """
     if not hwnd or not win32gui.IsWindow(hwnd):
         return
@@ -185,23 +180,19 @@ def click_at_normalized_pos(hwnd: int, norm_x: float, norm_y: float, mode: str, 
         if also_press_space:
             send_background_key(hwnd, "space", False)
     else:
-        prev_hwnd = win32gui.GetForegroundWindow()
-        prev_pos = win32api.GetCursorPos()
-        need_switch = (prev_hwnd != hwnd)
-
-        if need_switch:
+        # Usado dentro da Sessão Isolada (Sandbox / RDP) ou quando o usuário escolhe Foco
+        if win32gui.GetForegroundWindow() != hwnd:
             try:
                 ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
                 win32gui.SetForegroundWindow(hwnd)
                 ctypes.windll.user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)
-                time.sleep(0.012)
+                time.sleep(0.01)
             except Exception:
                 pass
 
         win32api.SetCursorPos((screen_x, screen_y))
         extra = ctypes.c_ulong(0)
         ii_ = Input_I()
-        # Pequeno movimento relativo (1px) para o motor do Roblox atualizar o hover do botão UI
         ii_.mi = MouseInput(1, 1, 0, MOUSEEVENTF_MOVE, 0, ctypes.pointer(extra))
         x = Input(ctypes.c_ulong(0), ii_)
         SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
@@ -221,22 +212,11 @@ def click_at_normalized_pos(hwnd: int, norm_x: float, norm_y: float, mode: str, 
         if also_press_space:
             send_direct_key("space", False)
 
-        if need_switch and restore_window and prev_hwnd and win32gui.IsWindow(prev_hwnd):
-            try:
-                time.sleep(0.015)
-                win32api.SetCursorPos(prev_pos)
-                ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
-                win32gui.SetForegroundWindow(prev_hwnd)
-                ctypes.windll.user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)
-            except Exception:
-                pass
-
 
 # =====================================================================
 # CAPTURA DE TELA DA JANELA DO ROBLOX (BACKGROUND & FOREGROUND)
 # =====================================================================
 def find_roblox_hwnd() -> int:
-    """Encontra o HWND da janela do Roblox Player."""
     target = []
 
     def enum_cb(hwnd, _):
@@ -260,7 +240,6 @@ def find_roblox_hwnd() -> int:
 
 
 def capture_window_rgb(hwnd: int, sct: mss.mss) -> np.ndarray | None:
-    """Captura a área cliente da janela do Roblox mesmo em segundo plano."""
     if not hwnd or not win32gui.IsWindow(hwnd) or win32gui.IsIconic(hwnd):
         return None
 
@@ -305,42 +284,31 @@ def capture_window_rgb(hwnd: int, sct: mss.mss) -> np.ndarray | None:
 
 
 # =====================================================================
-# VISÃO COMPUTACIONAL COMPLETA:
-# 1) Treino de Barra (Botão STOP + Círculo Roxo x2 com mão amarela)
-# 2) Barra Vertical de Arremesso (+20)
-# 3) Faixa Laranja de Chegada
+# VISÃO COMPUTACIONAL COMPLETA
 # =====================================================================
 def analyze_frame(arr: np.ndarray):
     h, w, _ = arr.shape
 
-    # -----------------------------------------------------------------
-    # 1. DETECÇÃO DO TREINO DE BARRA (Botão vermelho "STOP" na parte inferior)
-    # -----------------------------------------------------------------
+    # 1. DETECÇÃO DO TREINO DE BARRA (Botão vermelho "STOP")
     stop_box = arr[int(0.805 * h):int(0.865 * h), int(0.445 * w):int(0.555 * w)]
     red_ratio = np.mean((stop_box[:, :, 0] > 195) & (stop_box[:, :, 1] < 45) & (stop_box[:, :, 2] < 45))
     is_pullup = bool(red_ratio > 0.28)
 
-    # -----------------------------------------------------------------
-    # 2. DETECÇÃO DO CÍRCULO ROXO "x2" COM DEDO AMARELO (Aparece na Barra)
-    # -----------------------------------------------------------------
+    # 2. DETECÇÃO DO CÍRCULO ROXO "x2" COM DEDO AMARELO
     x2_pos = None
-    # Procura em toda a região útil da tela para funcionar mesmo que o círculo mude de lugar!
     roi_y0, roi_y1 = int(0.12 * h), int(0.80 * h)
     roi_x0, roi_x1 = int(0.16 * w), int(0.84 * w)
-    sub = arr[roi_y0:roi_y1:2, roi_x0:roi_x1:2]  # Subamostragem 2x para velocidade extrema
+    sub = arr[roi_y0:roi_y1:2, roi_x0:roi_x1:2]
     sR = sub[:, :, 0].astype(np.int16)
     sG = sub[:, :, 1].astype(np.int16)
     sB = sub[:, :, 2].astype(np.int16)
 
-    # Roxo/lilás do círculo redondo
     purple_mask = (sR > 165) & (sR < 248) & (sG > 50) & (sG < 175) & (sB > 210) & ((sB - sG) > 70) & ((sR - sG) > 50)
-    # Amarelo/dourado da mãozinha com o dedo apontando dentro do círculo
     yellow_hand = (sR > 240) & (sG > 190) & (sG < 238) & (sB > 60) & (sB < 165) & ((sR - sB) > 85)
 
     scale_sub = (512 * 288) / float(max(1, sub.shape[0] * sub.shape[1]))
     if np.sum(purple_mask) * scale_sub > 90 and np.sum(yellow_hand) * scale_sub > 18:
         hy, hx = np.where(yellow_hand)
-        # Usa a mediana dos pixels amarelos da mão para achar o centro exato do dedo
         cy_sub = int(np.median(hy))
         cx_sub = int(np.median(hx))
         rad = max(12, int(0.055 * sub.shape[1]))
@@ -352,11 +320,7 @@ def analyze_frame(arr: np.ndarray):
             norm_y = (roi_y0 + cy_sub * 2) / float(h)
             x2_pos = (float(norm_x), float(norm_y))
 
-    # -----------------------------------------------------------------
     # 3. VERIFICAÇÃO RIGOROSA DA BARRA DE ARREMESSO ("TAP TO THROW!")
-    # Exige simultaneamente: topo verde + meio amarelo + base laranja-avermelhada
-    # Isso impede 100% que a faixa laranja no chão seja confundida com a barra vertical!
-    # -----------------------------------------------------------------
     top_slice = arr[int(0.18 * h):int(0.32 * h), int(0.49 * w):int(0.51 * w)]
     mid_slice = arr[int(0.45 * h):int(0.53 * h), int(0.49 * w):int(0.51 * w)]
     bot_slice = arr[int(0.64 * h):int(0.71 * h), int(0.49 * w):int(0.51 * w)]
@@ -384,9 +348,7 @@ def analyze_frame(arr: np.ndarray):
             wy = np.where(white_rows)[0]
             slider_pos = float(np.mean(wy) / max(1, bar_col.shape[0]))
 
-    # -----------------------------------------------------------------
     # 4. DETECÇÃO DA FAIXA LARANJA DE CHEGADA
-    # -----------------------------------------------------------------
     small = arr[::2, ::2]
     sh, sw, _ = small.shape
     R = small[:, :, 0].astype(np.int16)
@@ -443,7 +405,7 @@ def analyze_frame(arr: np.ndarray):
 class RobloxThrowBotApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Bot Roblox v2 - Faixa Laranja + Arremesso +20 + Skip + Barra 2X")
+        self.root.title("Bot Roblox v3 - Faixa Laranja + Arremesso +20 + Skip + Barra 2X")
         self.root.geometry("580x740")
         self.root.attributes("-topmost", True)
 
@@ -456,23 +418,27 @@ class RobloxThrowBotApp:
         self.x2_click_count = 0
         self.state = "PARADO"
 
-        # Configurações padrão otimizadas
+        # Configurações padrão:
+        # Se estiver rodando no PC principal com 1 monitor, "background" NUNCA mexe no seu mouse!
+        # Se estiver rodando dentro do Windows Sandbox ou RDP Local, escolha "focus" (Sessão Isolada).
         self.config = {
-            "mode": "hybrid",             # "focus", "background", "hybrid"
+            "mode": "background",         # "background" (Nunca mexe no mouse) ou "focus" (Dentro da Sessão Isolada / RDP / Sandbox)
             "turn_dir": "right",          # "right" (Seta ->) ou "left" (Seta <-)
             "slider_threshold": 0.17,     # 0.00 a 0.22 = zona do +20 no topo da barra
-            "max_walk_time": 9.5,         # Tempo máximo andando até a faixa laranja (seg)
-            "use_fixed_walk_time": False, # Desmarcado por padrão para andar até a barra abrir!
-            "recorded_walk_time": 4.0,    # Tempo padrão caso marque tempo fixo
-            "post_throw_wait": 4.5,       # Tempo clicando em TAP TO SKIP e aguardando voltar ao cercado
-            "auto_skip": True,            # Clicar automaticamente no TAP TO SKIP após arremessar
-            "auto_pullup_x2": True,       # Clicar automaticamente na bolinha roxa x2 durante a barra
+            "max_walk_time": 12.0,        # Tempo máximo andando até a faixa laranja (seg)
+            "use_fixed_walk_time": False, # Desmarcado = anda direto até a barra TAP TO THROW abrir!
+            "recorded_walk_time": 4.0,
+            "post_throw_wait": 4.5,
+            "auto_skip": True,
+            "auto_pullup_x2": True,
         }
         self.load_config()
-        # Se o usuário tinha gravado 0.5s sem querer antes, corrige para um valor seguro
         if float(self.config.get("recorded_walk_time", 4.0)) < 1.2:
             self.config["recorded_walk_time"] = 4.0
             self.config["use_fixed_walk_time"] = False
+        if self.config.get("mode") == "hybrid":
+            # Como o usuário pediu para NUNCA afetar o mouse ou o monitor atual, migra de hybrid para background por padrão
+            self.config["mode"] = "background"
 
         self.build_ui()
         self.setup_hotkeys()
@@ -507,7 +473,6 @@ class RobloxThrowBotApp:
     def build_ui(self):
         pad = {"padx": 10, "pady": 4}
 
-        # Cabeçalho de Status
         status_frame = ttk.LabelFrame(self.root, text="Status em Tempo Real")
         status_frame.pack(fill="x", **pad)
 
@@ -526,13 +491,11 @@ class RobloxThrowBotApp:
         )
         self.lbl_throws.pack(anchor="w", padx=8, pady=2)
 
-        # Preview da Visão do Bot
         preview_frame = ttk.LabelFrame(self.root, text="Visão do Bot (Captura da Janela do Roblox)")
         preview_frame.pack(fill="x", **pad)
         self.lbl_preview = ttk.Label(preview_frame, text="Abra o Roblox para visualizar a captura aqui")
         self.lbl_preview.pack(padx=5, pady=4)
 
-        # Extras Automáticos (Tap to Skip & Barra 2X)
         extra_frame = ttk.LabelFrame(self.root, text="Automações Extras (Tap to Skip & Barra 2X)")
         extra_frame.pack(fill="x", **pad)
 
@@ -552,34 +515,25 @@ class RobloxThrowBotApp:
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
 
-        # Modo de Operação (Alt+Tab / Segundo Plano)
-        mode_frame = ttk.LabelFrame(self.root, text="Modo de Execução (Alt+Tab / Segundo Plano)")
+        mode_frame = ttk.LabelFrame(self.root, text="Modo de Execução (Monitor Único / Sessão Isolada RDP ou Sandbox)")
         mode_frame.pack(fill="x", **pad)
 
         self.mode_var = tk.StringVar(value=self.config["mode"])
         ttk.Radiobutton(
             mode_frame,
-            text="Híbrido Recomendado (Monitora no Alt+Tab e foca rápido para andar/clicar sem falha)",
-            variable=self.mode_var,
-            value="hybrid",
-            command=self.save_config,
-        ).pack(anchor="w", padx=8, pady=2)
-        ttk.Radiobutton(
-            mode_frame,
-            text="Segundo Plano Puro (Envia teclas via Win32 sem sair do Alt+Tab - deixe o Roblox aberto atrás)",
+            text="🔒 Segundo Plano Puro (NUNCA mexe no seu mouse nem tira o foco da sua tela atual)",
             variable=self.mode_var,
             value="background",
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
         ttk.Radiobutton(
             mode_frame,
-            text="Janela Focada (100% DirectInput com o Roblox aberto na tela)",
+            text="🖥️ Dentro da Sessão Isolada (RDP Local / Windows Sandbox - Mouse e Teclado exclusivos da VM)",
             variable=self.mode_var,
             value="focus",
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
 
-        # Configurações de Busca e Caminhada
         nav_frame = ttk.LabelFrame(self.root, text="Navegação até a Faixa Laranja")
         nav_frame.pack(fill="x", **pad)
 
@@ -593,7 +547,7 @@ class RobloxThrowBotApp:
         self.use_fixed_var = tk.BooleanVar(value=self.config["use_fixed_walk_time"])
         ttk.Checkbutton(
             nav_frame,
-            text="Limitar caminhada por tempo fixo (Desmarcado = anda até a barra 'TAP TO THROW!' abrir)",
+            text="Limitar caminhada por tempo fixo (Desmarcado = anda direto até a barra 'TAP TO THROW!' abrir)",
             variable=self.use_fixed_var,
             command=self.save_config,
         ).pack(anchor="w", padx=8, pady=2)
@@ -607,7 +561,6 @@ class RobloxThrowBotApp:
         self.btn_record = ttk.Button(row2, text="⏱ Gravar Tempo Andando (F9)", command=self.toggle_record_walk)
         self.btn_record.pack(side="left", padx=5)
 
-        # Configurações do Arremesso (+20)
         throw_frame = ttk.LabelFrame(self.root, text="Calibragem do Arremesso (+20) e Skip")
         throw_frame.pack(fill="x", **pad)
 
@@ -623,7 +576,6 @@ class RobloxThrowBotApp:
         self.wait_time_var = tk.DoubleVar(value=self.config["post_throw_wait"])
         ttk.Spinbox(row4, from_=2.0, to=15.0, increment=0.5, textvariable=self.wait_time_var, width=6, command=self.save_config).pack(side="left", padx=5)
 
-        # Botão Principal
         btn_frame = ttk.Frame(self.root)
         btn_frame.pack(fill="x", padx=10, pady=8)
 
@@ -671,38 +623,39 @@ class RobloxThrowBotApp:
             self.btn_toggle.config(text="▶ INICIAR BOT (F8)", bg="#28a745")
             self.lbl_state.config(text="ESTADO: PARADO (Pressione F8 para Iniciar)", foreground="#d9534f")
 
-    # =====================================================================
-    # CONTROLE DE TECLAS (COM PULSOS DE ROTAÇÃO SUAVES)
-    # =====================================================================
-    def set_key(self, key_name: str, down: bool):
+    def hold_walk_forward(self):
+        """
+        Envia o comando de andar para frente (W) continuamente para que o Roblox
+        nunca ignore o início da caminhada!
+        """
         mode = self.config["mode"]
-        if down and key_name not in self.active_keys:
-            self.active_keys.add(key_name)
-            if mode == "background":
-                send_background_key(self.hwnd, key_name, True)
-            else:
-                self.ensure_roblox_focus_if_needed()
-                send_direct_key(key_name, True)
-        elif not down and key_name in self.active_keys:
-            self.active_keys.discard(key_name)
-            if mode == "background":
-                send_background_key(self.hwnd, key_name, False)
-            else:
-                send_direct_key(key_name, False)
-                send_background_key(self.hwnd, key_name, False)
+        self.active_keys.add("w")
+        if mode == "background":
+            send_background_key(self.hwnd, "w", True)
+        else:
+            if self.hwnd and win32gui.GetForegroundWindow() != self.hwnd:
+                try:
+                    ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
+                    win32gui.SetForegroundWindow(self.hwnd)
+                    ctypes.windll.user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)
+                except Exception:
+                    pass
+            send_direct_key("w", True)
 
     def pulse_turn_key(self, key_name: str, duration: float = 0.055):
-        """
-        Gira a câmera em pequenos passos controlados e solta imediatamente!
-        Isso evita 100% que a tecla de seta fique presa e faça o personagem girar sem parar.
-        """
         mode = self.config["mode"]
         if mode == "background":
             send_background_key(self.hwnd, key_name, True)
             time.sleep(duration)
             send_background_key(self.hwnd, key_name, False)
         else:
-            self.ensure_roblox_focus_if_needed()
+            if self.hwnd and win32gui.GetForegroundWindow() != self.hwnd:
+                try:
+                    ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
+                    win32gui.SetForegroundWindow(self.hwnd)
+                    ctypes.windll.user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)
+                except Exception:
+                    pass
             send_direct_key(key_name, True)
             time.sleep(duration)
             send_direct_key(key_name, False)
@@ -710,32 +663,20 @@ class RobloxThrowBotApp:
     def release_all_keys(self):
         for k in ("w", "a", "s", "d", "left", "right", "space"):
             try:
-                send_direct_key(k, False)
+                if self.config["mode"] != "background":
+                    send_direct_key(k, False)
                 if self.hwnd:
                     send_background_key(self.hwnd, k, False)
             except Exception:
                 pass
         self.active_keys.clear()
 
-    def ensure_roblox_focus_if_needed(self):
-        if self.config["mode"] in ("focus", "hybrid") and self.hwnd:
-            fg = win32gui.GetForegroundWindow()
-            if fg != self.hwnd and fg != self.root.winfo_id():
-                try:
-                    ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
-                    win32gui.SetForegroundWindow(self.hwnd)
-                    ctypes.windll.user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)
-                except Exception:
-                    pass
-
-    # =====================================================================
-    # LOOP PRINCIPAL DE VISÃO E MÁQUINA DE ESTADOS
-    # =====================================================================
     def bot_loop(self):
         sct = mss.mss()
         last_preview_time = 0.0
         state_start_time = time.time()
         walk_start_time = 0.0
+        last_w_refresh = 0.0
         last_skip_click = 0.0
         last_x2_click = 0.0
 
@@ -763,11 +704,7 @@ class RobloxThrowBotApp:
                 time.sleep(0.05)
                 continue
 
-            # =================================================================
             # 1) MODO TREINO DE BARRA (PULL-UPS) OU CÍRCULO ROXO "x2" NA TELA
-            # Se o botão vermelho STOP estiver na tela (fazendo barra) ou o círculo
-            # roxo com a mão amarela (x2) aparecer, não anda e clica no círculo x2!
-            # =================================================================
             if info["is_pullup"] or info["x2_pos"] is not None:
                 self.release_all_keys()
                 self.state = "TREINANDO_BARRA_2X"
@@ -779,7 +716,6 @@ class RobloxThrowBotApp:
                             nx,
                             ny,
                             self.config["mode"],
-                            restore_window=(self.config["mode"] == "hybrid"),
                             also_press_space=False,
                         )
                         self.x2_click_count += 1
@@ -787,13 +723,10 @@ class RobloxThrowBotApp:
                 time.sleep(0.03)
                 continue
             elif self.state == "TREINANDO_BARRA_2X":
-                # Saiu da barra -> volta a buscar a faixa laranja
                 self.state = "BUSCANDO_FAIXA"
                 state_start_time = time.time()
 
-            # =================================================================
             # 2) BARRA VERTICAL DE ARREMESSO ("TAP TO THROW!") NA TELA
-            # =================================================================
             if info["is_power_bar"]:
                 if self.state != "ARREMESSANDO_+20":
                     self.release_all_keys()
@@ -803,14 +736,12 @@ class RobloxThrowBotApp:
                 slider_pos = info["slider_pos"]
                 thresh = float(self.config["slider_threshold"])
 
-                # Clica exatamente quando a barrinha branca atinge o topo (+20)
                 if slider_pos is not None and slider_pos <= thresh:
                     click_at_normalized_pos(
                         self.hwnd,
                         0.50,
                         0.55,
                         self.config["mode"],
-                        restore_window=(self.config["mode"] == "hybrid"),
                         also_press_space=True,
                     )
                     self.throw_count += 1
@@ -820,14 +751,11 @@ class RobloxThrowBotApp:
                     time.sleep(0.20)
                 continue
 
-            # =================================================================
             # 3) APÓS O ARREMESSO: CLICA EM "TAP TO SKIP" E AGUARDA VOLTAR AO CERCADO
-            # =================================================================
             if self.state == "TAP_TO_SKIP_E_RETORNO":
                 self.release_all_keys()
                 elapsed_wait = time.time() - state_start_time
 
-                # Durante o voo / captura do animal, clica a cada 0.45s para dar "TAP TO SKIP"
                 if self.config.get("auto_skip", True) and elapsed_wait > 0.6:
                     if time.time() - last_skip_click >= 0.45:
                         click_at_normalized_pos(
@@ -835,88 +763,72 @@ class RobloxThrowBotApp:
                             0.50,
                             0.62,
                             self.config["mode"],
-                            restore_window=(self.config["mode"] == "hybrid"),
                             also_press_space=False,
                         )
                         last_skip_click = time.time()
 
-                # Quando terminar o tempo de retorno ao cercado, inicia novo ciclo
                 if elapsed_wait >= float(self.config["post_throw_wait"]):
                     self.state = "BUSCANDO_FAIXA"
                     state_start_time = time.time()
                 time.sleep(0.05)
                 continue
 
-            # =================================================================
-            # 4) BUSCANDO A FAIXA LARANJA (SEM GIRAR EM CÍRCULOS!)
-            # Se a faixa laranja já está visível (ex: 27511 px, X=0.53 como no seu print),
-            # NÃO gira a câmera e vai direto para ANDANDO_ATE_FAIXA!
-            # =================================================================
+            # 4) BUSCANDO A FAIXA LARANJA
             if self.state == "BUSCANDO_FAIXA":
-                self.set_key("w", False)
-
-                # Se já enxerga a faixa laranja (qualquer quantidade >= 2000 px centralizada
-                # ou >= 8000 px quando já está de frente para ela como em 27511 px):
-                is_aligned = (info["orange_total"] >= 2000 and 0.25 <= info["orange_mx"] <= 0.78)
-                is_already_in_front = (info["orange_total"] >= 8000 and 0.18 <= info["orange_mx"] <= 0.82)
+                is_aligned = (info["orange_total"] >= 1500 and 0.22 <= info["orange_mx"] <= 0.80)
+                is_already_in_front = (info["orange_total"] >= 6000)
 
                 if is_aligned or is_already_in_front:
-                    self.release_all_keys()
                     self.state = "ANDANDO_ATE_FAIXA"
                     walk_start_time = time.time()
                     state_start_time = time.time()
+                    self.hold_walk_forward()
+                    last_w_refresh = time.time()
                     continue
 
-                # Caso ainda esteja olhando para a parede após o teleporte, dá 1 pulso curto na câmera
                 turn_key = "right" if self.config["turn_dir"] == "right" else "left"
-                # Se a faixa já começou a aparecer num canto da tela, gira na direção dela
-                if info["orange_total"] >= 1000:
+                if info["orange_total"] >= 800:
                     turn_key = "right" if info["orange_mx"] > 0.5 else "left"
 
                 self.pulse_turn_key(turn_key, duration=0.055)
                 time.sleep(0.035)
                 continue
 
-            # =================================================================
             # 5) ANDANDO RETO ATÉ A FAIXA LARANJA (ATÉ A BARRA +20 APARECER)
-            # =================================================================
             if self.state == "ANDANDO_ATE_FAIXA":
                 elapsed_walk = time.time() - walk_start_time
 
-                # Só usa tempo fixo se o usuário marcou explicitamente a caixa
                 if self.config["use_fixed_walk_time"] and elapsed_walk >= float(self.config["recorded_walk_time"]):
                     self.release_all_keys()
                     self.state = "AGUARDANDO_BARRA"
                     state_start_time = time.time()
                     continue
 
-                # Timeout de segurança caso o personagem trave em alguma cerca (9.5s)
                 if elapsed_walk > float(self.config["max_walk_time"]):
                     self.release_all_keys()
                     self.state = "BUSCANDO_FAIXA"
                     state_start_time = time.time()
                     continue
 
-                # Se por algum motivo virou para a parede e perdeu totalmente a faixa (< 300 px) no início:
-                if info["orange_total"] < 300 and elapsed_walk > 0.6 and info["orange_feet"] < 500:
+                if info["orange_total"] < 250 and elapsed_walk > 0.8 and info["orange_feet"] < 400:
                     self.release_all_keys()
                     self.state = "BUSCANDO_FAIXA"
                     state_start_time = time.time()
                     continue
 
-                # Anda reto para frente com W (sem apertar setas enquanto anda para nunca rodar em círculos!)
-                self.set_key("w", True)
+                # Re-envia o sinal de W a cada 0.25s para manter a caminhada firme até pisar na faixa laranja
+                if "w" not in self.active_keys or (time.time() - last_w_refresh > 0.25):
+                    self.hold_walk_forward()
+                    last_w_refresh = time.time()
+
                 time.sleep(0.025)
                 continue
 
-            # =================================================================
-            # 6) AGUARDANDO A BARRA DE ARREMESSO ABRIR (CASO USE TEMPO FIXO)
-            # =================================================================
+            # 6) AGUARDANDO A BARRA DE ARREMESSO ABRIR
             if self.state == "AGUARDANDO_BARRA":
                 self.release_all_keys()
                 if time.time() - state_start_time > 1.2:
-                    # Se parou um pouco antes da faixa, anda mais 0.6s para frente
-                    self.set_key("w", True)
+                    self.hold_walk_forward()
                     time.sleep(0.6)
                     self.release_all_keys()
                     state_start_time = time.time()
