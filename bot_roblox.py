@@ -1,23 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-Bot Automático para Roblox v4 - Busca Faixa Laranja + Arremesso (+20) + Tap to Skip + Barra 2X
-=================================================================================================
-Por que na v3 o bot não andava nem clicava no círculo roxo?
-1. No arquivo config_bot.json, as opções `auto_pullup_x2` e `auto_skip` estavam salvas como `false`!
-   - Na v4, o bot força `auto_pullup_x2 = True` e `auto_skip = True` ao iniciar, garantindo que ele
-     sempre clique no círculo roxo 2X e no Tap to Skip.
-2. O modo estava em "Segundo Plano Puro (PostMessage)", mas o motor do Roblox (DirectInput / RawInput)
-   BLOQUEIA 100% comandos de teclado (W / Setas) e cliques enviados via PostMessage quando o jogo
-   está no seu Windows principal sem foco ou sem uma Sessão Isolada (RDP / VM).
-   - Na v4, adicionamos 3 modos claros e funcionais:
-     a) "⚡ Clique Instantâneo + Teclado Real (Funciona em 1 Monitor)" -> Move o cursor para o círculo
-        roxo / botão em 15ms e devolve o seu mouse exatamente para onde você estava, e envia a tecla W
-        via ScanCode real do Windows.
-     b) "🖥️ Sessão Isolada (RDP Local / Windows Sandbox)" -> Quando o Roblox está rodando na janela do
-        RDP / Sandbox em segundo plano, o mouse e o teclado ficam 100% presos lá dentro sem tocar no seu mouse!
-3. Correção da caminhada na Faixa Laranja:
-   - Se a faixa laranja já está visível (ex: 27511 px, X=0.53), o bot foca o Roblox 1 única vez no início
-     da caminhada e mantém a tecla física W pressionada via DirectInput ScanCode até a barra "+20" abrir!
+Bot Automático para Roblox v5 - Desequipar Mob da Mão + Busca Faixa Laranja + Arremesso (+20) + Skip + Barra 2X
+=================================================================================================================
+Novidades e Correções da v5:
+1. Detecção Automática de Mob Equipado na Mão (Borda Branca na Hotbar Inferior):
+   - Sempre que o personagem volta do arremesso com um mob novo equipado na mão (100% das vezes),
+     o bot detecta a borda branca do slot equipado na hotbar inferior (com 100% de precisão)
+     e clica no slot / aperta a tecla correspondente (ou Backspace) para GUARDAR o mob da mão
+     ANTES de procurar a faixa laranja! Assim o mob gigante nunca tampa a visão dos pixels!
+2. Correção do Travamento no Estado "ARREMESSANDO_+20":
+   - No print anterior, a tela do bot mostrava "ESTADO: ARREMESSANDO_+20 | Barra +20: Não" porque,
+     se a barra de arremesso desaparecesse sem a barrinha branca passar pelo +20, o bot nunca saía
+     do estado ARREMESSANDO_+20 e ficava parado para sempre!
+   - Agora, se `is_power_bar` for `False` enquanto o estado for `ARREMESSANDO_+20`, ele sai
+     imediatamente desse estado e volta a desequipar o mob / buscar a faixa laranja!
+3. Auto-Click no Círculo Roxo "x2" (Treino de Barra) e "TAP TO SKIP":
+   - Mantidos e ativos por padrão ao iniciar.
 """
 
 import ctypes
@@ -113,6 +111,16 @@ VK_MAP = {
     "s": (0x53, 0x1F, False),
     "d": (0x44, 0x20, False),
     "space": (0x20, 0x39, False),
+    "1": (0x31, 0x02, False),
+    "2": (0x32, 0x03, False),
+    "3": (0x33, 0x04, False),
+    "4": (0x34, 0x05, False),
+    "5": (0x35, 0x06, False),
+    "6": (0x36, 0x07, False),
+    "7": (0x37, 0x08, False),
+    "8": (0x38, 0x09, False),
+    "9": (0x39, 0x0A, False),
+    "0": (0x30, 0x0B, False),
     "left": (win32con.VK_LEFT, 0x4B, True),
     "right": (win32con.VK_RIGHT, 0x4D, True),
     "up": (win32con.VK_UP, 0x48, True),
@@ -121,13 +129,11 @@ VK_MAP = {
 
 
 def focus_roblox_window(hwnd: int):
-    """Garante que a janela do Roblox receba o foco para aceitar comandos DirectInput."""
     if not hwnd or not win32gui.IsWindow(hwnd):
         return
     fg = win32gui.GetForegroundWindow()
     if fg != hwnd:
         try:
-            # Simula tecla Alt rápida para o Windows permitir a troca de foco
             ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
             win32gui.SetForegroundWindow(hwnd)
             ctypes.windll.user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)
@@ -137,7 +143,6 @@ def focus_roblox_window(hwnd: int):
 
 
 def send_direct_key(key_name: str, down: bool):
-    """Envia tecla via DirectInput ScanCode (único método que o Roblox aceita para andar com W e girar câmera)."""
     vk, scan, is_ext = VK_MAP[key_name]
     flags = KEYEVENTF_SCANCODE
     if is_ext:
@@ -152,11 +157,6 @@ def send_direct_key(key_name: str, down: bool):
 
 
 def click_roblox_pos(hwnd: int, norm_x: float, norm_y: float, restore_cursor: bool = True, also_press_space: bool = False):
-    """
-    Clica em uma coordenada normalizada (0.0 a 1.0) dentro da janela do Roblox usando DirectInput real.
-    Se `restore_cursor=True`, o clique dura apenas ~25 milissegundos e devolve o mouse exatamente
-    para onde você estava mexendo!
-    """
     if not hwnd or not win32gui.IsWindow(hwnd):
         return
 
@@ -171,20 +171,16 @@ def click_roblox_pos(hwnd: int, norm_x: float, norm_y: float, restore_cursor: bo
         return
 
     prev_pos = win32api.GetCursorPos()
-
     focus_roblox_window(hwnd)
 
-    # Posiciona o cursor em cima do alvo (ex: círculo roxo x2 ou centro da tela)
     win32api.SetCursorPos((screen_x, screen_y))
     extra = ctypes.c_ulong(0)
     ii_ = Input_I()
-    # Movimento relativo de 1px para o motor GUI do Roblox detectar o mouse em cima do botão roxo x2
     ii_.mi = MouseInput(1, 1, 0, MOUSEEVENTF_MOVE, 0, ctypes.pointer(extra))
     x = Input(ctypes.c_ulong(0), ii_)
     SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
     time.sleep(0.012)
 
-    # Mouse Left Down
     ii_.mi = MouseInput(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, ctypes.pointer(extra))
     x = Input(ctypes.c_ulong(0), ii_)
     SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
@@ -193,7 +189,6 @@ def click_roblox_pos(hwnd: int, norm_x: float, norm_y: float, restore_cursor: bo
 
     time.sleep(0.025)
 
-    # Mouse Left Up
     ii_.mi = MouseInput(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, ctypes.pointer(extra))
     x = Input(ctypes.c_ulong(0), ii_)
     SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
@@ -279,8 +274,42 @@ def capture_window_rgb(hwnd: int, sct: mss.mss) -> np.ndarray | None:
 
 
 # =====================================================================
-# VISÃO COMPUTACIONAL COMPLETA
+# VISÃO COMPUTACIONAL COMPLETA (INCLUINDO DETECÇÃO DE MOB EQUIPADO NA HOTBAR)
 # =====================================================================
+def detect_equipped_hotbar_slot(arr: np.ndarray):
+    """
+    Detecta se há algum mob equipado na mão verificando a borda branca brilhante
+    em qualquer um dos slots da hotbar inferior (1 a 0).
+    Retorna (is_equipped: bool, slot_center_x: float | None, slot_center_y: float).
+    """
+    h, w, _ = arr.shape
+    x0, x1 = int(0.25 * w), int(0.75 * w)
+
+    top_band = arr[int(0.860 * h):int(0.900 * h), x0:x1]
+    mid_band = arr[int(0.910 * h):int(0.942 * h), x0:x1]
+    bot_band = arr[int(0.946 * h):int(0.958 * h), x0:x1]
+
+    has_white_top = np.any((top_band[:, :, 0] > 215) & (top_band[:, :, 1] > 215) & (top_band[:, :, 2] > 210), axis=0)
+    has_white_bot = np.any((bot_band[:, :, 0] > 215) & (bot_band[:, :, 1] > 215) & (bot_band[:, :, 2] > 210), axis=0)
+    # O interior do quadrado do slot da hotbar é escuro (< 115), evitando confundir com a cerca azul/branca
+    has_dark_mid = np.mean(mid_band, axis=(0, 2)) < 115
+
+    equipped_cols = has_white_top & has_white_bot & has_dark_mid
+    win = max(10, int(0.035 * w))
+    best_score = 0.0
+    best_cx = None
+
+    for i in range(max(1, len(equipped_cols) - win)):
+        score = float(np.sum(equipped_cols[i:i + win])) / float(win)
+        if score > best_score:
+            best_score = score
+            best_cx = (x0 + i + win // 2) / float(w)
+
+    if best_score > 0.55 and best_cx is not None:
+        return True, float(best_cx), 0.915
+    return False, None, 0.915
+
+
 def analyze_frame(arr: np.ndarray):
     h, w, _ = arr.shape
 
@@ -343,7 +372,12 @@ def analyze_frame(arr: np.ndarray):
             wy = np.where(white_rows)[0]
             slider_pos = float(np.mean(wy) / max(1, bar_col.shape[0]))
 
-    # 4. DETECÇÃO DA FAIXA LARANJA DE CHEGADA
+    # 4. DETECÇÃO DE MOB EQUIPADO NA MÃO (Hotbar com borda branca selecionada)
+    mob_equipped, mob_slot_x, mob_slot_y = detect_equipped_hotbar_slot(arr)
+    if is_pullup or is_power_bar:
+        mob_equipped = False
+
+    # 5. DETECÇÃO DA FAIXA LARANJA DE CHEGADA
     small = arr[::2, ::2]
     sh, sw, _ = small.shape
     R = small[:, :, 0].astype(np.int16)
@@ -358,7 +392,7 @@ def analyze_frame(arr: np.ndarray):
     roi = np.zeros_like(combined, dtype=bool)
     roi[int(0.42 * sh):int(0.95 * sh), int(0.16 * sw):int(0.84 * sw)] = True
     roi[int(0.72 * sh):, :int(0.25 * sw)] = False
-    roi[int(0.83 * sh):, int(0.32 * sw):int(0.68 * sw)] = False
+    roi[int(0.83 * sh):, int(0.24 * sw):int(0.76 * sw)] = False
     roi[int(0.43 * sh):int(0.79 * sh), int(0.36 * sw):int(0.51 * sw)] = False
 
     det_all = combined & roi
@@ -366,7 +400,7 @@ def analyze_frame(arr: np.ndarray):
 
     foot_roi = np.zeros_like(combined, dtype=bool)
     foot_roi[int(0.68 * sh):int(0.94 * sh), int(0.20 * sw):int(0.80 * sw)] = True
-    foot_roi[int(0.83 * sh):, int(0.32 * sw):int(0.68 * sw)] = False
+    foot_roi[int(0.83 * sh):, int(0.24 * sw):int(0.76 * sw)] = False
     det_feet = orange_tiles & foot_roi
 
     scale_factor = (1024 * 576) / float(sw * sh)
@@ -386,6 +420,9 @@ def analyze_frame(arr: np.ndarray):
         "x2_pos": x2_pos,
         "is_power_bar": is_power_bar,
         "slider_pos": slider_pos,
+        "mob_equipped": mob_equipped,
+        "mob_slot_x": mob_slot_x,
+        "mob_slot_y": mob_slot_y,
         "orange_total": orange_total,
         "orange_pure": orange_pure,
         "orange_feet": orange_feet,
@@ -395,13 +432,13 @@ def analyze_frame(arr: np.ndarray):
 
 
 # =====================================================================
-# INTERFACE GRÁFICA E LÓGICA DO BOT (v4)
+# INTERFACE GRÁFICA E LÓGICA DO BOT (v5)
 # =====================================================================
 class RobloxThrowBotApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Bot Roblox v4 - Faixa Laranja + Arremesso +20 + Skip + Barra 2X")
-        self.root.geometry("600x760")
+        self.root.title("Bot Roblox v5 - Guardar Mob + Faixa Laranja + Arremesso +20 + Skip + Barra 2X")
+        self.root.geometry("610x780")
         self.root.attributes("-topmost", True)
 
         self.running = False
@@ -411,10 +448,11 @@ class RobloxThrowBotApp:
         self.hwnd = 0
         self.throw_count = 0
         self.x2_click_count = 0
+        self.unequip_count = 0
         self.state = "PARADO"
 
         self.config = {
-            "restore_cursor": True,       # Devolve o mouse instantaneamente após clicar no círculo roxo / arremesso
+            "restore_cursor": True,
             "turn_dir": "right",
             "slider_threshold": 0.17,
             "max_walk_time": 12.0,
@@ -423,11 +461,12 @@ class RobloxThrowBotApp:
             "post_throw_wait": 4.5,
             "auto_skip": True,
             "auto_pullup_x2": True,
+            "auto_unequip_mob": True,
         }
         self.load_config()
-        # Força que as duas automações estejam SEMPRE ativadas ao abrir para não ficarem desligadas por engano!
         self.config["auto_pullup_x2"] = True
         self.config["auto_skip"] = True
+        self.config["auto_unequip_mob"] = True
         self.config["use_fixed_walk_time"] = False
 
         self.build_ui()
@@ -454,6 +493,7 @@ class RobloxThrowBotApp:
         self.config["post_throw_wait"] = float(self.wait_time_var.get())
         self.config["auto_skip"] = bool(self.auto_skip_var.get())
         self.config["auto_pullup_x2"] = bool(self.auto_x2_var.get())
+        self.config["auto_unequip_mob"] = bool(self.auto_unequip_var.get())
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, indent=2)
@@ -479,12 +519,15 @@ class RobloxThrowBotApp:
         self.lbl_state.pack(anchor="w", padx=8, pady=3)
 
         self.lbl_vision = ttk.Label(
-            status_frame, text="Janela Roblox: Procurando... | Barra +20: Não | Faixa Laranja: 0 px", font=("Segoe UI", 9)
+            status_frame, text="Janela Roblox: Procurando... | Barra +20: Não | Mob na Mão: Não | Faixa: 0 px", font=("Segoe UI", 9)
         )
         self.lbl_vision.pack(anchor="w", padx=8, pady=2)
 
         self.lbl_throws = ttk.Label(
-            status_frame, text="Arremessos (+20): 0  |  Cliques Bônus Barra (x2): 0", font=("Segoe UI", 9, "bold"), foreground="#0275d8"
+            status_frame,
+            text="Arremessos (+20): 0  |  Mobs Guardados: 0  |  Cliques Barra (x2): 0",
+            font=("Segoe UI", 9, "bold"),
+            foreground="#0275d8",
         )
         self.lbl_throws.pack(anchor="w", padx=8, pady=2)
 
@@ -493,8 +536,16 @@ class RobloxThrowBotApp:
         self.lbl_preview = ttk.Label(preview_frame, text="Abra o Roblox para visualizar a captura aqui")
         self.lbl_preview.pack(padx=5, pady=4)
 
-        extra_frame = ttk.LabelFrame(self.root, text="Automações Ativas (Arremesso +20, Tap to Skip & Barra 2X)")
+        extra_frame = ttk.LabelFrame(self.root, text="Automações Ativas (Guardar Mob, Tap to Skip & Barra 2X)")
         extra_frame.pack(fill="x", **pad)
+
+        self.auto_unequip_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            extra_frame,
+            text="🐾 Auto-Guardar Mob Novo da Mão (Clica no slot equipado da Hotbar p/ não tampar os pixels)",
+            variable=self.auto_unequip_var,
+            command=self.save_config,
+        ).pack(anchor="w", padx=8, pady=2)
 
         self.auto_x2_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
@@ -613,7 +664,6 @@ class RobloxThrowBotApp:
             self.state = "BUSCANDO_FAIXA"
             self.btn_toggle.config(text="⏸ PAUSAR BOT (F8)", bg="#dc3545")
             self.lbl_state.config(text="ESTADO: RODANDO - Verificando Tela", foreground="#28a745")
-            # Ao ligar o bot, já coloca o foco na janela do Roblox para o DirectInput funcionar imediatamente!
             if self.hwnd:
                 focus_roblox_window(self.hwnd)
         else:
@@ -623,7 +673,6 @@ class RobloxThrowBotApp:
             self.lbl_state.config(text="ESTADO: PARADO (Pressione F8 para Iniciar)", foreground="#d9534f")
 
     def start_walking_forward(self):
-        """Foca a janela do Roblox e pressiona a tecla física W via DirectInput ScanCode."""
         if self.hwnd:
             focus_roblox_window(self.hwnd)
         if "w" not in self.active_keys:
@@ -653,6 +702,7 @@ class RobloxThrowBotApp:
         last_w_refresh = 0.0
         last_skip_click = 0.0
         last_x2_click = 0.0
+        last_unequip_time = 0.0
 
         while True:
             loop_start = time.time()
@@ -678,7 +728,18 @@ class RobloxThrowBotApp:
                 time.sleep(0.05)
                 continue
 
+            # =================================================================
+            # CORREÇÃO CRÍTICA: Se estava em ARREMESSANDO_+20 mas a barra sumiu,
+            # reseta imediatamente para BUSCANDO_FAIXA para nunca ficar travado!
+            # =================================================================
+            if self.state == "ARREMESSANDO_+20" and not info["is_power_bar"]:
+                self.release_all_keys()
+                self.state = "BUSCANDO_FAIXA"
+                state_start_time = time.time()
+
+            # =================================================================
             # 1) MODO TREINO DE BARRA (PULL-UPS) OU CÍRCULO ROXO "x2" NA TELA
+            # =================================================================
             if info["is_pullup"] or info["x2_pos"] is not None:
                 self.release_all_keys()
                 self.state = "TREINANDO_BARRA_2X"
@@ -700,7 +761,9 @@ class RobloxThrowBotApp:
                 self.state = "BUSCANDO_FAIXA"
                 state_start_time = time.time()
 
+            # =================================================================
             # 2) BARRA VERTICAL DE ARREMESSO ("TAP TO THROW!") NA TELA
+            # =================================================================
             if info["is_power_bar"]:
                 if self.state != "ARREMESSANDO_+20":
                     self.release_all_keys()
@@ -725,7 +788,9 @@ class RobloxThrowBotApp:
                     time.sleep(0.20)
                 continue
 
+            # =================================================================
             # 3) APÓS O ARREMESSO: CLICA EM "TAP TO SKIP" E AGUARDA VOLTAR AO CERCADO
+            # =================================================================
             if self.state == "TAP_TO_SKIP_E_RETORNO":
                 self.release_all_keys()
                 elapsed_wait = time.time() - state_start_time
@@ -747,8 +812,36 @@ class RobloxThrowBotApp:
                 time.sleep(0.05)
                 continue
 
-            # 4) BUSCANDO A FAIXA LARANJA
-            if self.state == "BUSCANDO_FAIXA":
+            # =================================================================
+            # 4) GUARDAR MOB EQUIPADO NA MÃO ANTES DE BUSCAR A FAIXA LARANJA!
+            # Sempre que voltar do arremesso com um mob novo na mão (borda branca
+            # na hotbar inferior), clica exatamente no slot equipado para retirá-lo
+            # da mão e liberar a visão dos pixels!
+            # =================================================================
+            if self.config.get("auto_unequip_mob", True) and info["mob_equipped"] and info["mob_slot_x"] is not None:
+                if time.time() - last_unequip_time >= 0.45:
+                    self.release_all_keys()
+                    self.state = "GUARDANDO_MOB_DA_MAO"
+                    # Clica diretamente no quadrado do slot equipado na hotbar para guardar o mob
+                    click_roblox_pos(
+                        self.hwnd,
+                        info["mob_slot_x"],
+                        info["mob_slot_y"],
+                        restore_cursor=self.config.get("restore_cursor", True),
+                        also_press_space=False,
+                    )
+                    # Se o slot equipado estiver na posição do slot 1 (x < 0.33), também envia tecla '1' se ainda continuar equipado na próxima leitura
+                    self.unequip_count += 1
+                    last_unequip_time = time.time()
+                    time.sleep(0.25)
+                    self.state = "BUSCANDO_FAIXA"
+                    continue
+
+            # =================================================================
+            # 5) BUSCANDO A FAIXA LARANJA
+            # =================================================================
+            if self.state in ("BUSCANDO_FAIXA", "GUARDANDO_MOB_DA_MAO"):
+                self.state = "BUSCANDO_FAIXA"
                 is_aligned = (info["orange_total"] >= 1500 and 0.22 <= info["orange_mx"] <= 0.80)
                 is_already_in_front = (info["orange_total"] >= 6000)
 
@@ -768,7 +861,9 @@ class RobloxThrowBotApp:
                 time.sleep(0.035)
                 continue
 
-            # 5) ANDANDO RETO ATÉ A FAIXA LARANJA (ATÉ A BARRA +20 APARECER)
+            # =================================================================
+            # 6) ANDANDO RETO ATÉ A FAIXA LARANJA (ATÉ A BARRA +20 APARECER)
+            # =================================================================
             if self.state == "ANDANDO_ATE_FAIXA":
                 elapsed_walk = time.time() - walk_start_time
 
@@ -790,7 +885,6 @@ class RobloxThrowBotApp:
                     state_start_time = time.time()
                     continue
 
-                # Mantém a tecla W pressionada via DirectInput ScanCode!
                 if "w" not in self.active_keys or (time.time() - last_w_refresh > 0.35):
                     self.start_walking_forward()
                     last_w_refresh = time.time()
@@ -798,7 +892,9 @@ class RobloxThrowBotApp:
                 time.sleep(0.025)
                 continue
 
-            # 6) AGUARDANDO A BARRA DE ARREMESSO ABRIR
+            # =================================================================
+            # 7) AGUARDANDO A BARRA DE ARREMESSO ABRIR
+            # =================================================================
             if self.state == "AGUARDANDO_BARRA":
                 self.release_all_keys()
                 if time.time() - state_start_time > 1.2:
@@ -820,12 +916,13 @@ class RobloxThrowBotApp:
                     if info["is_power_bar"] and info["slider_pos"] is not None
                     else ("SIM" if info["is_power_bar"] else "Não")
                 )
+                mob_txt = f"SIM (X={info['mob_slot_x']:.2f})" if info["mob_equipped"] and info["mob_slot_x"] is not None else "Não"
                 x2_txt = "SIM!" if info["x2_pos"] is not None else ("Barra Ativa" if info["is_pullup"] else "Não")
                 self.lbl_vision.config(
-                    text=f"Barra +20: {bar_txt} | Treino 2X: {x2_txt} | Faixa Laranja: {info['orange_total']} px (X={info['orange_mx']:.2f})"
+                    text=f"Barra +20: {bar_txt} | Mob na Mão: {mob_txt} | 2X: {x2_txt} | Faixa: {info['orange_total']} px (X={info['orange_mx']:.2f})"
                 )
                 self.lbl_throws.config(
-                    text=f"Arremessos (+20): {self.throw_count}  |  Cliques Bônus Barra (x2): {self.x2_click_count}"
+                    text=f"Arremessos (+20): {self.throw_count}  |  Mobs Guardados: {self.unequip_count}  |  Cliques Barra (x2): {self.x2_click_count}"
                 )
                 if self.running:
                     self.lbl_state.config(text=f"ESTADO: {self.state} (F8 para Pausar)", foreground="#28a745")
