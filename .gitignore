@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+config_bot.json
+*.log
+.DS_Store
